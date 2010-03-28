@@ -253,8 +253,11 @@ class BallPickupRequest(C2SPacket):
     time = 0
 
 def main():
-    d = "03 00 56 e1 17 78 00 00 00 00 db 00 00 00 00 00 00 00 00 00 00 00 cf 07 00 00 00 00 40 00 04 00"
-    d = ''.join([b.decode('hex') for b in d.split()])
+    r = """
+    03 00 56 e1 17 78 00 00 00 00 db 00 00 00 00 00
+    00 00 00 00 00 00 cf 07 00 00 00 00 40 00 04 00
+    """
+    d = ''.join([b.decode('hex') for b in r.split()])
     p = Position(d)
     print p.y & 0xFFFF
     print p

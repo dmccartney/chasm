@@ -117,7 +117,9 @@ class Packet(object):
         try:
             result = pack(self._all_format(),*self._all_values()) + self.tail
         except:
-            warn("unable to pack %s" % self.__class__.__name__)
+            warn("unable to pack %s (format=%s)" % \
+                 (self.__class__.__name__,
+                  self._all_format(),))
             result = ''
         return result
 

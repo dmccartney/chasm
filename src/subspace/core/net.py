@@ -18,7 +18,6 @@ from threading import Thread, Lock, Event
 from Queue import Queue, Empty
 from time import time, sleep
 from logging import warn
-from subspace.game import c2s_packet
 
 MAX_PACKET_SIZE = 512 # we grab up to this many bytes from the socket at a time
 QUEUE_SIZE_IN = 500 # the number of incoming packets to queue before dropping 
@@ -127,12 +126,11 @@ class Client(object):
         """ This blocks to disconnect and tie up loose threads. """
         if self._connected:
             self.send(packet.Disconnect())
-            sleep(1)
             self._connected = False
         self._disconnecting.set() # this tells the threads to end
         for name,thread in self._threads.iteritems():
             if thread.is_alive():
-                thread.join(2) # giving them all 2s may leave sync dawdling +3s
+                thread.join(1) # giving them all 2s may leave sync dawdling +3s
 
     def _connect(self,address,client_key,encryption):
         """

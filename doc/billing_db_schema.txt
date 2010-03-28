@@ -1,0 +1,107 @@
+The billing DB schema is very much a work in progress, here is some raw info
+about the tables. (sql to create tables is at the bottom)
+---
+
+ss_players:
+    *id, name, password, creation_date
+ 
+ss_player_banners:
+    *id, player_id*, banner, banner_date
+
+ss_player_scores:
+    *id, player_id*, zone_id*, 
+    kills, deaths, goals, kill_points, flag_points, score_date
+
+ss_player_sessions:
+    *id, player_id*, zone_id*, seconds, session_date
+
+ss_squads:
+    *id, name, password, owner_player_id*
+
+ss_squad_members:
+    *id, squad_id*, player_id*, join_date
+
+ss_zones:
+    *id, name, password
+
+ss_zone_sessions:
+    *id, zone_id, seconds, session_date
+
+-- sql to create the tables --
+
+CREATE TABLE IF NOT EXISTS ss_players (
+  id int(11) NOT NULL auto_increment,
+  "name" varchar(32) NOT NULL,
+  "password" varchar(64) NOT NULL COMMENT 'sha256 hash of the password',
+  creation_date datetime NOT NULL,
+  PRIMARY KEY  (id),
+  UNIQUE KEY "name" ("name")
+);
+
+CREATE TABLE IF NOT EXISTS ss_player_banners (
+  id int(11) NOT NULL auto_increment,
+  player_id int(11) NOT NULL,
+  banner blob NOT NULL,
+  banner_date datetime NOT NULL,
+  PRIMARY KEY  (id),
+  KEY player_id (player_id)
+);
+
+CREATE TABLE IF NOT EXISTS ss_player_scores (
+  id int(11) NOT NULL auto_increment,
+  player_id int(11) NOT NULL,
+  zone_id int(11) NOT NULL,
+  kills int(11) NOT NULL,
+  deaths int(11) NOT NULL,
+  goals int(11) NOT NULL,
+  kill_points int(11) NOT NULL,
+  flag_points int(11) NOT NULL,
+  score_date datetime NOT NULL,
+  PRIMARY KEY  (id),
+  KEY player_id (player_id)
+);
+
+CREATE TABLE IF NOT EXISTS ss_player_sessions (
+  id int(11) NOT NULL auto_increment,
+  player_id int(11) NOT NULL,
+  zone_id int(11) NOT NULL,
+  seconds int(11) NOT NULL default '0',
+  session_date datetime NOT NULL,
+  PRIMARY KEY  (id),
+  KEY player_id (player_id)
+);
+
+CREATE TABLE IF NOT EXISTS ss_squads (
+  id int(11) NOT NULL auto_increment,
+  "name" varchar(32) NOT NULL,
+  "password" varchar(64) NOT NULL COMMENT 'sha256 hash of the password',
+  owner_player_id int(11) NOT NULL,
+  PRIMARY KEY  (id),
+  UNIQUE KEY "name" ("name")
+);
+
+CREATE TABLE IF NOT EXISTS ss_squad_members (
+  id int(11) NOT NULL auto_increment,
+  squad_id int(11) default NULL COMMENT 'id from ss_squads',
+  player_id int(11) NOT NULL COMMENT 'id from ss_players',
+  join_date datetime NOT NULL,
+  PRIMARY KEY  (id),
+  KEY squad_id (squad_id)
+);
+
+CREATE TABLE IF NOT EXISTS ss_zones (
+  id int(11) NOT NULL auto_increment,
+  "name" varchar(256) NOT NULL,
+  "password" varchar(64) NOT NULL COMMENT 'sha256 of the password',
+  PRIMARY KEY  (id),
+  UNIQUE KEY "name" ("name")
+);
+
+CREATE TABLE IF NOT EXISTS ss_zone_sessions (
+  id int(11) NOT NULL auto_increment,
+  zone_id int(11) NOT NULL,
+  seconds int(11) NOT NULL default '0',
+  session_date datetime NOT NULL,
+  PRIMARY KEY  (id),
+  KEY zone_id (zone_id)
+);

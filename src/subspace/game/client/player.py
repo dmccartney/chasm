@@ -1,9 +1,15 @@
 """
-This implements the subspace game protocol atop the subspace core protocol.
+This implements a subspace game player atop the subspace core protocol.
+#TODO: refactor locally handled packets into external modules
 """
-from subspace.core import net
+from subspace.core import net, server
 from subspace.core.util import now
-from subspace.game import map
+from subspace.game.client import map
+from subspace.game.client.balls import BallGame
+from subspace.game.client.flags import FlagGame
+from subspace.game.client.greens import Greens
+from subspace.game.client.session import SessionHandler
+from subspace.game.client.messages import Messenger
 from subspace.game import c2s_packet, s2c_packet
 from time import sleep
 from logging import debug, info, warn
@@ -20,11 +26,13 @@ class Player:
     >>> p.logout()
     """
     def __init__(self, name=None, password=None, 
-                        address=("zone.aswz.org",5000), arena="0"):
+                        address=("zone.aswz.org",5000), arena="0", 
+                        auto_create_user=False):
         self.name = name
         self.password = password
         self.address = address
         self.arena = arena
+        self.auto_create_user = auto_create_user
         self._logging_off = Event()
         # arena_entered .is_set() when we're finally in the arena
         # so if login is instructed to not block, then outsiders can safely
@@ -52,31 +60,32 @@ class Player:
         # these will be started during login, stopped during logoff
         self._threads = {
             "recv"  : Thread(target=self._receiving_loop,
-                                    name=("Game:%s:recv" % self.name)),
+                                    name=("Player:%s:recv" % self.name)),
             "pos"   : Thread(target=self._position_loop,
-                                    name=("Game:%s:pos)" % self.name))
+                                    name=("Player:%s:pos" % self.name))
             # we do not need a thread for sending since _send is threadsafe
             }
-        self._session = _Session(self)
+        self._session = SessionHandler(self)
         self.arena_player_list = _ArenaPlayerList(self)
-        self._flag_game = _FlagGame(self)
-        self._ball_game = _BallGame(self)
+        self._flag_game = FlagGame(self)
+        self._ball_game = BallGame(self)
+        self._greens = Greens(self)
         self._locations = _Locations(self)
-        self._greens = _Greens(self)
-        self.messenger = _Messenger(self)
+        self.messenger = Messenger(self)
         self._stats = _Stats(self)
         self._misc = _Misc(self)
 
-    def login(self,block_until_in_arena=True):
+    def login(self,timeout=None):
         """ 
         This initiates the connection and spawns the receiving thread.
         Most clients will do nothing until the player has actually entered the 
-        arena.  Because only once we are in the arena will (most) player 
+        arena.  Only once we are actually in the arena will (most) player 
         activities work as expected.  So, by default, this method will block 
-        until we are in the arena.  If, however, a client sets 
-        block_until_in_arena = False, then this login() will return as soon as
-        it is connected.  When so used, the client should manually inspect the
-        player.arena_entered, a threading.Event that is set upon arena entry.
+        until we are in the arena.  If however a client sets a timeout, then
+        this login() will connect and then wait at most 'timeout' seconds 
+        before returning.  When so used, the client should manually inspect the
+        player.arena_entered, which is a threading.Event that is set upon arena
+        entry.
         """
         # setup connection
         self._conn = net.Client(self.address)
@@ -85,12 +94,14 @@ class Player:
             thread.start()
         self._session.login(self.name, self.password)
         del self.password # forget it now that we're done with it
-        if block_until_in_arena:
-            self.arena_entered.wait()
+        if timeout is not None:
+            self.arena_entered.wait(timeout=timeout)
+        return self.arena_entered.is_set()
 
     def logout(self):
         info("logging out")
-        self._send(c2s_packet.LeaveArena(),reliable=True)
+        if self.arena_entered.is_set():
+            self._send(c2s_packet.LeaveArena(),reliable=True)
         # Traces of the VIE client seem to show that it waits until it receives
         # an ACK for this LeaveArena packet before it closes the core
         # connection.  
@@ -189,9 +200,10 @@ class Player:
                 continue
             with self._immediate_data_lock:
                 p = c2s_packet.Position(**self._immediate_data)
+            p.time = now()
             p._do_checksum() # this only works after any modifications
             self._send(p)
-            sleep(0.200) # TODO: get Misc:SendPositionDelay from _settings
+            sleep(0.2) # TODO: get Misc:SendPositionDelay from _settings
         info("stopping sending positions")
 
 class _Misc:
@@ -304,176 +316,6 @@ class _ArenaPlayerList():
         """ Initializes a new player or returns their current tuple. """
         return self._player_list.get(id,self._player_tuple(id,"","",-1,-1))
 
-class _Session():
-    """
-    This handles all session handshake packets and exposes session information.
-    On initialization it takes a connected player and sends the login packet.
-    It then responds to packets to keep the player logged into the zone.
-    """
-    def __init__(self,player):
-        self._player = player
-        self._map_checksum = 0 # properly set later by _handle_map_information
-        handlers = {
-            s2c_packet.LoginResponse._id    : self._handle_login_response,
-            s2c_packet.ArenaSettings._id    : self._handle_arena_settings,
-            s2c_packet.ArenaEntered._id     : self._handle_arena_entered,
-            s2c_packet.LoginComplete._id    : self._handle_login_complete,
-            s2c_packet.MapInformation._id   : self._handle_map_information,
-            s2c_packet.SecurityRequest._id  : self._handle_security_request,
-            s2c_packet.KeepAlive._id        : self._handle_keep_alive,
-            }
-        self._player.add_packet_handlers(**handlers)
-    
-    def login(self, name, password):
-        # send the player login packet 
-        self._player._send(c2s_packet.Login(name=name, password=password),
-                            reliable=True)
-
-    def _handle_login_response(self,raw_packet):
-        p = s2c_packet.LoginResponse(raw_packet)
-        if p.response == 0:
-            debug("login succeeded, sending arena login")
-            self._player._send(c2s_packet.ArenaLogin(),
-                            reliable=True)
-        else:
-            warn("login failure: %s" % p.response_meaning())
-            self.logoff()
-            
-    def _handle_arena_entered(self,raw_packet):
-        p = s2c_packet.ArenaEntered(raw_packet)
-        info("entered arena")
-        self._player.arena_entered.set() # trigger any waiting until we're in
-        # TODO: check sequence handshake
-
-    def _handle_arena_settings(self,raw_packet):
-        p = s2c_packet.ArenaSettings(raw_packet)
-        self._settings = p
-        # TODO: generate interface to access settings
-        #r = p.get_ship_settings()
-        #debug("ship and game settings received\n"+
-        #      "a warbird starts with gun level = %d" % \
-        #            r[0]["weapons"]["InitialGuns"])
-
-    def _handle_login_complete(self,raw_packet):
-        p = s2c_packet.LoginComplete(raw_packet)
-        debug("login sequence complete")
-        # TODO: begin sending position packets
-        self._player._position_thread.start()
-
-    def _handle_keep_alive(self,raw_packet):
-        p = s2c_packet.KeepAlive(raw_packet)
-        #debug("got keep-alive")
-        # TODO: ignore or maybe respond
-
-    def _handle_security_request(self,raw_packet):
-        p = s2c_packet.SecurityRequest(raw_packet)
-        k = p.checksum_key & 0xffffffff
-        debug("got security request with key = 0x%08x" % k)
-        # TODO: do checksums
-        # if we are going to do it, do it, but for now we send default garbage
-        r = c2s_packet.SecurityChecksum()
-        #from subspace.core.checksum import exe_checksum, lvl_checksum, settings_checksum
-        #r.subspace_exe_checksum = exe_checksum(k)
-        #r.map_lvl_checksum = lvl_checksum(self._map,k)
-        #r.settings_checksum = settings_checksum(self._settings,k)
-        #debug("responding with: %s" % r)
-        self._player._send(r)
-
-    def _handle_map_information(self,raw_packet):
-        p = s2c_packet.MapInformation(raw_packet)
-        map_file_name = p.map_file_name.rstrip('\x00')
-        debug("got map information (%s) (provided checksum=0x%08x)" % \
-                    (map_file_name,p.map_checksum))
-        # TODO: check if we actually have this map, otherwise request it
-        try:
-            self._map = map.LVL(map_file_name)
-            self._map.load()
-        except Exception as e:
-            debug("failure loading %s: %s" % (map_file_name,e))
-            self._map = None
-            return
-        debug("loaded map (checksum=0x%08x)" % self._map.checksum(0))
-        
-
-class _Messenger:
-    """ 
-    This handles incoming messages and exposes methods for sending.
-    send_message() permits sending of any message.
-    send_*_message are convenience methods that use send_message()
-    E.g.
-    >>> send_message("hello",type=messenger.PUB)
-    >>> send_message("pssst",type=messenger.PRIV,target_player_id=player_id)
-    >>> send_message(":divine.216:hello",type=messenger.REMOTE)
-    >>> send_message("5;hello",type=messenger.CHANNEL)
-    >>> send_public_message("hello")
-    >>> send_private_message(player_id,"pssst")
-    >>> send_remote_message("divine.216","hello") 
-    >>> send_channel_message(5,"hello")
-    """
-    message_types = { 
-            0 : "ARENA",        # green text, e.g. from *arena or *zone
-            1 : "PUB_MACRO",
-            2 : "PUB",          # normal
-            3 : "FREQ",         # //text
-            4 : "FREQPRIV",     # "text
-            5 : "PRIV",         # /text
-            6 : "SYSPRIV",      # red text with a player name, e.g. *warn text
-            7 : "REMOTE",       # :name:text
-            8 : "SYS",          # red text w/o a player name, e.g. checksum
-            9 : "CHANNEL"       # ;1;text
-            }
-    # using these instead of raw integer makes code more readable
-    ARENA, PUB_MACRO, PUB, FREQ, FREQ_PRIV, \
-    PRIV, SYS_PRIV, REMOTE, SYS, CHANNEL = range(10)
-    
-    def __init__(self,player):
-        self._player = player
-        handlers = {
-            s2c_packet.ChatMessage._id      : self._handle_chat_message,
-            }
-        self._player.add_packet_handlers(**handlers)
-        self._message_handlers = {} 
-    
-    def send_message(self,text,type=2,sound=0,target_player_id=-1):
-        p = c2s_packet.ChatMessage()
-        p.sound = sound
-        p.type = type
-        p.target_player_id = target_player_id
-        p.tail = text + '\x00'
-        info('sent  "%s"' % text)
-        self._player._send(p)
-    
-    def send_public_message(self,text,**args):
-        self.send_message(text,type=self.PUB,**args)
-        
-    def send_private_message(self,player_id,text,**args):
-        self.send_message(text,type=self.PUB,target_player_id=player_id,**args)
-    
-    def send_remote_message(self,player_name,text,**args):
-        # TODO: check for malformed player names (special chars etc.)
-        self.send_message(':'+player_name+':'+text,type=self.REMOTE,**args)
-    
-    def send_freq_message(self,text,**args):
-        self.send_message(text,type=self.FREQ,**args)
-    
-    def send_channel_message(self,channel_id,text,**args):
-        """ Note: until you join a channel, the server will disregard these."""
-        self.send_message(str(channel_id)+';'+text,type=self.CHANNEL,**args)
-    
-    def add_message_handler(self,message_type,hnd):
-        self._message_handlers.setdefault(message_type,[]).append(hnd)
-    
-    def set_channels(self,channels=[]):
-        """ This sets the ?chat channels to the list of channels provided. """
-        self.send_public_message("?chat=" + ','.join(channels))
-        # TODO: store these to do error checking on send and translate on recv
-
-    def _handle_chat_message(self,raw_packet):
-        p = s2c_packet.ChatMessage(raw_packet)
-        info("got chat message (type=0x%02X): %s" % (p.type,p.message()))
-        for hnd in self._message_handlers.get(p.type,[]):
-            hnd(p) # we are adults, they can have the actual packet
-
 class _Stats:
     """ This tracks player statistics in the game. """
 
@@ -551,111 +393,20 @@ class _Locations:
         debug("received warpto (%d,%d)" % (p.x,p.y))
         # TODO: keep track of where it stuck us
 
-class _FlagGame:
-    """
-    This handles all flag packets to implement the basics of the flag game.
-    """
-    flags = []
-    def __init__(self,player):
-        self._player = player
-        handlers = {
-            s2c_packet.FlagClaim._id        : self._handle_flag_claim,
-            s2c_packet.FlagDrop._id         : self._handle_flag_drop,
-            s2c_packet.FlagVictory._id      : self._handle_flag_victory,
-            s2c_packet.FlagPosition._id     : self._handle_flag_position,
-            }
-        self._player.add_packet_handlers(**handlers)
-
-    def _handle_flag_drop(self,raw_packet):
-        p = s2c_packet.FlagDrop(raw_packet)
-        debug("player (id=%d) dropped a flag" % p.player_id)
-        # TODO: check his previous state to see how many flags he was carrying
-
-    def _handle_flag_victory(self,raw_packet):
-        p = s2c_packet.FlagVictory(raw_packet)
-        debug("flag victory (freq=%d,points=%d)" % (p.freq,p.points))
-        # TODO: reset flag game internally
-        
-    def _handle_flag_claim(self,raw_packet):
-        p = s2c_packet.FlagClaim(raw_packet)
-        debug("player (id=%d) picked up flag (id=%d)" % \
-                (p.player_id,p.flag_id))
-        # TODO: track flags, issue events
-    
-    def _handle_flag_position(self,raw_packet):
-        p = s2c_packet.FlagPosition(raw_packet)
-        if p.freq_owner == 0xFFFF:
-            freq_owner = "neutral"
-        else:
-            freq_owner = "freq(%d)" % p.freq_owner
-        debug("got flag freq (freq=%s)" % (freq_owner))
-        # TODO: do something with the flag info
-
-class _BallGame:
-    """
-    This handles all ball packets to implement the basics of the ball game.
-    """
-    def __init__(self,player):
-        self._player = player
-        handlers = {
-            s2c_packet.BallPosition._id     : self._handle_ball_position,
-            }
-        self._player.add_packet_handlers(**handlers)
-        
-    def _handle_ball_position(self,raw_packet):
-        p = s2c_packet.BallPosition(raw_packet)
-        #debug("got ball (id=%d) position (%d,%d) moving (%d,%d)" % \
-        #            (p.id,p.x,p.y,p.dx,p.dy))
-        # TODO: do something with this and with its p.time (stateful logic)
-
-class _Greens:
-    """ This handles greens in the game. TODO: implement """
-    def __init__(self,player):
-        self._player = player
-        handlers = {
-            s2c_packet.SelfGreenPickup._id  : self._handle_self_green_pickup,
-            s2c_packet.OtherGreenPickup._id : self._handle_other_green_pickup,
-            }
-        self._player.add_packet_handlers(**handlers)
-
-    def _handle_other_green_pickup(self,raw_packet):
-        p = s2c_packet.OtherGreenPickup(raw_packet)
-        debug("other green pickup (player_id=%d) (prize_number=%d)" % \
-                (p.player_id,p.prize_number))
-        # TODO: update internal green distribution
-    
-    def _handle_self_green_pickup(self,raw_packet):
-        """ This means that we received some prizes. """
-        p = s2c_packet.SelfGreenPickup(raw_packet)
-        debug("self green pickup (prize_number=%d)" % p.prize_number)
-        # TODO: process green
-
-class Zone:
-    pass # TODO: implement
-
 def main():
     import logging
     from random import randint
-    logging.basicConfig(level=logging.INFO,
+    logging.basicConfig(level=logging.DEBUG,
         format="<%(threadName)25.25s > %(message)s")
-    
-    p = Player("divtest","password",("zone.aswz.org",5000))
-    p.login()
-    p.messenger.send_public_message("hello!")
-    sleep(1) # do other stuff
-    p.set_ship(0)
-    p.messenger.send_public_message("I'm in a ship!")
-    sleep(1)
-    p.set_ship(8)
-    # TODO: rethink how to interface with movement spin in a circle at x,y
-    x,y = 10000,10000
-    p.set_ship_data(x=x,y=y,energy=1000,bounty=216,rotation=0)
-    for rot in range(0,40):
-        p.set_ship_data(rotation=rot)
-        sleep(0.3)
-    p.set_ship(8)
-    p.messenger.send_public_message("hmph, back to spec")
-    print p.arena_player_list.all()
+    p = Player("divtest1", "password",
+               ("zone.aswz.org",5000), arena="0",
+               auto_create_user=True)
+    if p.login(5):
+        p.messenger.send_public_message("hello!")
+        sleep(10)
+        p.messenger.send_public_message("g'bye!")
+    else:
+        debug("login failed")
     p.logout()
 
 if __name__ == '__main__':

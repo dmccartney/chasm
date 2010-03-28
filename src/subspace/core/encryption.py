@@ -17,6 +17,9 @@ class VIE:
     version = 0x0001 # this is the identifier for this encryption scheme
     def __init__(self, client_key, server_key):
         """ Prepares the encryption table. """
+        if client_key == server_key:
+            self.encrypt = self.decrypt = lambda x: x
+            return
         # we're simulating c32 integer truncation, so we inspect type sizes
         self._size2 = [t for t in "lih" if array(t).itemsize == 2][0]
         self._size4 = [t for t in "lih" if array(t).itemsize == 4][0]
@@ -71,10 +74,8 @@ def main():
     from time import time
     count = 10000
     key = randint(-(2**31),(2**31)-1)
-    e = VIE(0,key)
+    e = VIE(0,0)
     print "key = ",key
-    print "table[0]:\t %s" % \
-                ' '.join([x.encode("hex") for x in e._table[:1].tostring()])
     input = "\x5a\xf1\x7a\x76\x00\x00\x00\x00\x00\x00\x00\x00"
     print "    input:\t" + ' '.join([x.encode("hex") for x in input])
     t1 = time()

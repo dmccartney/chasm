@@ -422,8 +422,12 @@ def main_settings_test():
     print a.get_ship_settings()
 
 def main():
-    d =    "07 00 00 ff ff 57 65 6c 63 6f 6d 65 20 74 6f 20 41 53 57 5a 2e 20 20 68 74 74 70 3a 2f 2f 61 73 77 7a 2e 6f 72 67 00"
-    d = ''.join([b.decode('hex') for b in d.split()])
+    r = """
+    07 00 00 ff ff 57 65 6c 63 6f 6d 65 20 74 6f 20
+    41 53 57 5a 2e 20 20 68 74 74 70 3a 2f 2f 61 73
+    77 7a 2e 6f 72 67 00
+    """
+    d = ''.join([b.decode('hex') for b in r.split()])
     p = ChatMessage(d)
     print p
     print p.tail.rstrip('\x00')
