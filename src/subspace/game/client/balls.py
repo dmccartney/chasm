@@ -18,7 +18,7 @@ class BallGame:
         
     def _handle_ball_position(self,raw_packet):
         p = s2c_packet.BallPosition(raw_packet)
-        #debug("got ball (id=%d) position (%d,%d) moving (%d,%d)" % \
-        #            (p.id,p.x,p.y,p.dx,p.dy))
+        debug("got ball (id=%d) position (%d,%d) moving (%d,%d)" % \
+                    (p.id,p.x,p.y,p.dx,p.dy))
         # TODO: do something with this and with its p.time (stateful logic)
 

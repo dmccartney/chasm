@@ -3,6 +3,7 @@ This handles player login sessions.
 TODO: better doc
 """
 from subspace.game import c2s_packet, s2c_packet
+from subspace.game.client.map import LVL
 from logging import debug, info, warn
 
 class SessionHandler():
@@ -28,9 +29,9 @@ class SessionHandler():
     
     def login(self, name, password):
         # send the player login packet 
-        self._player._send(c2s_packet.Login(name=name, password=password),
+        self._player._send(c2s_packet.LoginVIE(name=name, password=password),
                             reliable=True)
-        if self._player.auto_create_user:
+        if self._player.auto_create_user: # store them if we might need them
             self.name, self.password = name, password
 
     def _handle_login_response(self,raw_packet):
@@ -42,7 +43,7 @@ class SessionHandler():
         else:
             warn("login failure: %s" % p.response_meaning())
             if self._player.auto_create_user and p.response == 1:
-                self._player._send(c2s_packet.Login(name=self.name, 
+                self._player._send(c2s_packet.LoginVIE(name=self.name, 
                                                     password=self.password,
                                                     is_new_user=True))
             else:
@@ -67,7 +68,6 @@ class SessionHandler():
         p = s2c_packet.LoginComplete(raw_packet)
         debug("login sequence complete")
         # TODO: begin sending position packets
-        self._player._position_thread.start()
 
     def _handle_keep_alive(self,raw_packet):
         p = s2c_packet.KeepAlive(raw_packet)
@@ -95,7 +95,7 @@ class SessionHandler():
                     (map_file_name,p.map_checksum))
         # TODO: check if we actually have this map, otherwise request it
         try:
-            self._map = map.LVL(map_file_name)
+            self._map = LVL(map_file_name)
             self._map.load()
         except Exception as e:
             debug("failure loading %s: %s" % (map_file_name,e))

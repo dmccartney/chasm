@@ -42,5 +42,5 @@ class FlagGame:
             freq_owner = "neutral"
         else:
             freq_owner = "freq(%d)" % p.freq_owner
-        debug("got flag freq (freq=%s)" % (freq_owner))
+        debug("flag to (%d,%d)(%s)" % (p.x, p.y, freq_owner))
         # TODO: do something with the flag info

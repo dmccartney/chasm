@@ -2,7 +2,7 @@
 This implements a subspace game player atop the subspace core protocol.
 #TODO: refactor locally handled packets into external modules
 """
-from subspace.core import net, server
+from subspace.core import client, server
 from subspace.core.util import now
 from subspace.game.client import map
 from subspace.game.client.balls import BallGame
@@ -88,10 +88,15 @@ class Player:
         entry.
         """
         # setup connection
-        self._conn = net.Client(self.address)
+        debug("opening client socket ...")
+        self._conn = client.Client(self.address)
+        if not self._conn._connected:
+            warn("Connection failed!")
+            return False
         for name,thread in self._threads.iteritems():
-            debug("starting thread %s" % name)
+            debug("starting thread '%s'" % name)
             thread.start()
+        debug("logging in as %s ..." % name)            
         self._session.login(self.name, self.password)
         del self.password # forget it now that we're done with it
         if timeout is not None:
@@ -165,6 +170,7 @@ class Player:
         # We could check if self._conn is alive.  But leaving this naked will 
         # make bugs louder and easier to locate.  Eventually, we should 
         # gracefully catch these.
+        print '>',packet._id.encode("hex")
         self._conn.send(packet,**arg)
 
     def _receiving_loop(self):
@@ -182,6 +188,7 @@ class Player:
                 self._logging_off.set()
                 return
             packet_id = raw_packet[0]
+            print '<',packet_id.encode("hex")
             with self._packet_handlers_lock:
                 handlers = self._packet_handlers.get(packet_id,[])[:]
                 # we make a copy of this packet's handlers so we can unlock
@@ -398,16 +405,16 @@ def main():
     from random import randint
     logging.basicConfig(level=logging.DEBUG,
         format="<%(threadName)25.25s > %(message)s")
-    p = Player("divtest1", "password",
-               ("zone.aswz.org",5000), arena="0",
-               auto_create_user=True)
+    p = Player("divtest1", "password",("zone.aswz.org",5000), 
+               arena="0", auto_create_user=True)
     if p.login(5):
         p.messenger.send_public_message("hello!")
-        sleep(10)
+        sleep(3)
         p.messenger.send_public_message("g'bye!")
+        p.logout()
     else:
         debug("login failed")
-    p.logout()
+
 
 if __name__ == '__main__':
     main()
