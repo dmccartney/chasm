@@ -20,23 +20,23 @@ class ArenaEntered(S2CPacket):
 
 class PlayerEntering(S2CPacket):
     _id = '\x03'
-    _format = "bB20s20sIIHHHHHHB"
+    _format = "BB20s20sIIHHHHhHB"
     _components = ["ship","accepts_audio","name","squad","kill_points",
                    "flag_points","player_id","freq","wins","losses",
                    "attached_to","flags_carried","misc_bits"]
     player_id = 0
     name = ""
     squad = ""
-    freq = 0
-    ship = 0
+    freq = 8025
+    ship = 8
+    accepts_audio = 0
     kill_points = 0
     flag_points = 0
     flags_carried = 0 # this is not authoritative
     wins = 0
     losses = 0
     attached_to = -1 # -1 indicates "not attached"
-    
-    accepts_audio = False
+    misc_bits = 0
 
 class PlayerLeaving(S2CPacket):
     _id = '\x04'
@@ -164,10 +164,10 @@ class LoginResponse(S2CPacket):
         }
         return meanings[self.response]
     server_version = 134
-    is_vip = False
-    checksum_exe = 0xF1429CE8
+    is_vip = 0
+    checksum_exe = 0xFFFFFFFF
     demographic_data = False
-    checksum_code = 0x281CC948
+    checksum_code = 0xFFFFFFFF #0xF1429CE8 #0x281CC948
     checksum_news = 0xFFFFFFFF
 
 class BallGoal(S2CPacket):
@@ -201,9 +201,19 @@ class ArenaSettings(S2CPacket):
     _id = '\x0F'
     # http://bitbucket.org/grelminar/asss/src/tip/src/packets/clientset.h
     # TODO: parse spawn_pos, long/short/byte/prizeweight sets
+    
+    _format = "3s1152s80s16s116s32s28s" 
+    _components = ["bits", "ships", "long", "spawn_positions", 
+                   "short", "byte", "prizeweight"]
+    bits = ''  # 3 byte bitfield
+    ships = '' # 8 * 144 byte ShipSettings
+    long = ''  # 20 * 4 byte signed integers
+    short = '' # 58 * 2 byte signed integers
+    byte = ''  # 32 * 1 byte signed integers
+    prizeweight = '' # 28 * 1 byte unsigined integers
+    spawn_positions = '' # 4 * 4 byte bit fields
 
-    def checksum(self,key):
-        #assert len(self.tail) == 357*4
+    def checksum(self, key):
         return sum(unpack_from("I",self.tail[i:i+4])[0] ^ key 
                     for i in range(0,357)) & 0xffffffff
 
@@ -235,7 +245,7 @@ class ArenaSettings(S2CPacket):
                 ("SeeMines",        1),
                 ("Unused1",         3)]
         result = [{} for x in range(8)]
-        d = self.tail[3:]
+        d = self.ships
         for ship_set in result:
             offset = 0
             for k,format in ship_set_format:
@@ -415,6 +425,13 @@ class WarpedTo(S2CPacket):
     _components = ["x","y"]
     x = 0
     y = 0
+
+class ContVersion(S2CPacket):
+    _id = '\x34'
+    _format = "HI"
+    _components = ["continuum_verison","continuum_exe_checksum"]
+    continuum_verison = 40
+    continuum_exe_checksum = 0xc9b61486
 
 def main_settings_test():
     t = '\x00' * 1428

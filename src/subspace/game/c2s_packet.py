@@ -75,12 +75,13 @@ class SpectatePlayer(C2SPacket):
     _components = ["spectated_player_id"]
     spectated_player_id = 0
 
-class Login(C2SPacket):
+class LoginVIE(C2SPacket):
+    """ Original login packet -- like Cont, without the 64 byte tail. """ 
     _id = '\x09'
     _format = "B32s32sIBhxxhIII"+"12x"
     _components = ["is_new_user", "name", "password", "machine_id",
                    "connection_type", "time_zone_bias", "client_version", 
-                   "memory_checksum0", "memory_checksum1", "permission_id"]
+                   "exe_checksum", "code_checksum", "permission_id"]
     is_new_user = False
     name = ""
     password = ""
@@ -88,10 +89,30 @@ class Login(C2SPacket):
     connection_type = 2     # options: 1 slow, 2 fast, 3 unknown, 4 not RAS
     time_zone_bias = 240    # 240 specifies EST
     client_version = 134    # 134 = VIE, 36-40 = Continuum
-    memory_checksum0 = 444
-    memory_checksum1 = 555
+    exe_checksum = 0xF1429CE8
+    code_checksum = 0x281CC948
     permission_id = 0 
-    # continuum includes an additional 64 byte tail
+
+class LoginCont(C2SPacket):
+    """ This is the same as LoginVIE except it has the 64 byte tail. """
+    _id = '\x24'
+    _format = "B32s32sIBhxxhIII"+"12x"+"64s"
+    _components = ["is_new_user", "name", "password", "machine_id",
+                   "connection_type", "time_zone_bias", "client_version", 
+                   "memory_checksum0", "memory_checksum1", "permission_id",
+                   "continuum_data"]
+    is_new_user = False
+    name = ""
+    password = ""
+    machine_id = 1
+    connection_type = 4     # options: 1 slow, 2 fast, 3 unknown, 4 not RAS
+    time_zone_bias = 240    # 240 specifies EST
+    client_version = 40    # 134 = VIE, 36-40 = Continuum
+    memory_checksum0 = 444
+    memory_checksum1 = 0
+    permission_id = 0 
+    continuum_data = ""
+    
 
 class RequestSSUpdate(C2SPacket):
     _id = '\x0B'
@@ -233,7 +254,7 @@ class DropBrick(C2SPacket):
     x = 0  # tile coordinate
     y = 0  # tile coordinate
 
-class FireBall(C2SPacket):
+class BallPosition(C2SPacket):
     _id = '\x1F'
     _format = "BHHhhHI"
     _components = ["ball_id","x","y","dx","dy","my_player_id","time"]
@@ -251,6 +272,13 @@ class BallPickupRequest(C2SPacket):
     _components = ["ball_id","time"]
     ball_id = 0
     time = 0
+
+class BallGoal(C2SPacket):
+    _id = '\x21'
+    _format = "BHH"
+    ball_id = 0
+    x = 0
+    y = 0
 
 def main():
     r = """
