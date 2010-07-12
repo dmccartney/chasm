@@ -249,9 +249,8 @@ class Manager:
     def _handle_player_channel(self, zone_address, raw_packet):
         zone = self.biller.zones.get_zone(zone_address)
         p = z2b_packet.PlayerChannel(raw_packet)
-        print p
         debug("player sent channel message")
-        pass #TODO
+        pass #TODO: forward channel messages to all others
 
     def _handle_player_command(self, zone_address, raw_packet):
         """

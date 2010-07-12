@@ -37,7 +37,7 @@ class Messenger:
 
     def info(self, receiver, text):
         """ This sends the provided text to the specified receiver. """
-        debug("info message, -> %s: %s" % (receiver, text))
+        debug("info message, Biller -> %s: %s" % (receiver, text))
         p = b2z_packet.Command(player_id=receiver.id)
         p.tail = text+'\x00'
         receiver.send(p)

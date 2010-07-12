@@ -53,10 +53,10 @@ class Biller:
 
     def start(self):
         """ Starts the biller and spawns its threads."""
-        debug("starting billing server %s" % self)
+        debug("Starting billing server: %s" % self)
         self._conn = Server(self.address)
         for thread_name, thread in self._threads.iteritems():
-            debug("starting thread %s" % thread_name)
+            debug("Starting biller's thread %s" % thread_name)
             thread.start()
         self.is_running = True
 
@@ -68,9 +68,9 @@ class Biller:
         self._shutting_down.set()
         self.zones.logout_all_zones()
         self.db.commit()
-        debug("closing threads")
+        debug("Closing biller's threads")
         for thread_name, thread in self._threads.iteritems():
-            debug("stopping thread %s" % thread_name)
+            debug("Stopping biller thread %s" % thread_name)
             if thread is not current_thread():
                 thread.join(3.0) # give each thread 3s to join
         self._conn.shutdown()
@@ -111,12 +111,12 @@ class Biller:
             except Empty:
                 continue
             if raw_packet is None: # core spits out None to signal disconnect
-                warn("%s:%d hung up on us" % address)
+                warn("Zone %s:%d hung up on the biller" % address)
                 continue
             packet_id = raw_packet[0]
             handlers = self._packet_handlers.get(packet_id, [])
             if len(handlers) < 1:
-                warn("unhandled billing packet (len=%d) %s" % (len(raw_packet),
+                warn("Unhandled billing packet (len=%d) %s" % (len(raw_packet),
                            ' '.join([x.encode("hex") for x in raw_packet])))
             else:
                 for hnd in handlers:

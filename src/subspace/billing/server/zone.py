@@ -41,6 +41,7 @@ class Manager:
         This logs out every zone.
         It is called, for example, when the biller stops.
         """
+        debug("treating all zones as logged out")
         for zone in self._zones.itervalues():
                 zone.logout()
         self._zones = {}
@@ -50,8 +51,6 @@ class Manager:
         zone_name = p.zone_name.rstrip('\x00')
         pwd = p.password.rstrip('\x00')
         zone = Zone(self.biller, zone_address, zone_name, pwd)
-        debug("zone connecting: name='%s', pass='%s'" % \
-              (zone.name, zone.password))
         if zone.login():
             debug("zone connection succeeded: name='%s' -- sending ident" % \
                                                         (zone.name))
@@ -70,6 +69,7 @@ class Manager:
         if zone is not None:
             debug("zone disconnecting: %s" % zone)
             zone.logout()
+            del self._zones[zone_address]
         else:
             warn("zone disconnect from unknown address: %s:%d" % zone_address)
         # TODO: verify zone password, respond etc.
