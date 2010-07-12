@@ -17,21 +17,13 @@ from socket import socket,AF_INET,SOCK_DGRAM,timeout
 from threading import Thread, Lock, Event
 from Queue import Queue, Empty
 from time import time, sleep
-from logging import warn
+from logging import warn, info, debug
 
 MAX_PACKET_SIZE = 512 # we grab up to this many bytes from the socket at a time
 QUEUE_SIZE_IN = 500 # the number of incoming packets to queue before dropping 
 QUEUE_SIZE_OUT = 500 # same, but for outgoing packets
 SYNC_PERIOD = 5.0 # seconds between Sync's (see _sync)
 RELIABLE_TIMEOUT_RESEND = 5.0 # seconds between reliable resends
-
-class Server(object):
-    """
-    This is a server using the subspace core protocol.
-    TODO: implement the server end of core.
-    """
-    def __init__(self):
-        pass
 
 class Client(object):
     """
@@ -64,13 +56,13 @@ class Client(object):
         self._chunks = [] 
         self._threads = { # these do nothing until they .start()
             # this sends packets from the outgoing queue
-            "send"  : Thread(target=self._sending_loop,name="Core:send"),
-            # this recvs packets into the incoming queue
-            "recv"  : Thread(target=self._receiving_loop,name="Core:recv"),
+            "send" : Thread(target = self._sending_loop, name = "Core:send"),
+            # this receives packets into the incoming queue
+            "recv" : Thread(target = self._receiving_loop, name = "Core:recv"),
             # this resends unacknowledged items from the reliable outgoing list
-            "rel"   : Thread(target=self._reliable_loop,name="Core:rel"),
+            "rel" : Thread(target = self._reliable_loop, name = "Core:rel"),
             # this sends a sync packet every SYNC_PERIOD seconds
-            "sync"  : Thread(target=self._syncing_loop,name="Core:sync"),
+            "sync" : Thread(target = self._syncing_loop, name = "Core:sync"),
             }
         self._sent_packet_count = 0
         self._received_packet_count = 0
@@ -92,7 +84,7 @@ class Client(object):
             # packet.ConnectResponse is handled inside _connect
             }
         self._disconnecting = Event() # all threads poll this event to continue
-        self._connect(address,client_key,encryption)
+        self._connect(address, client_key, encryption)
 
     def send(self,outgoing_packet,reliable=False):
         """ 
@@ -140,35 +132,35 @@ class Client(object):
         # setup socket
         self._socket = socket(AF_INET,SOCK_DGRAM)
         try:
+            debug("connecting to %s:%d" % address)
             self._socket.connect(address)
-        except:
-            warn("unable to connect socket to %r" % address)
+            self._socket.setblocking(True)
+            self._socket.settimeout(3.0)
+            # raw send the Connect packet
+            connect_p = packet.Connect(key=client_key,version=encryption.version)
+            self._socket.sendall(connect_p.raw())
+            # now we wait for ConnectResponse
+            self._connected = False
+            for attempt in range(3):
+                debug("attempt %d ..." % attempt)
+                try:
+                    raw_packet = self._socket.recv(MAX_PACKET_SIZE)
+                except timeout:
+                    continue
+                # ensure we got the ConnectResponse packet
+                if raw_packet[:2] == '\x00'+packet.ConnectResponse._id:
+                    p = packet.ConnectResponse(raw_packet)
+                    self._enc = encryption(client_key,p.server_key)
+                    self._connected = True
+                    break
+                else:
+                    debug("no connect response: %s" % ''.join(x.encode("hex") for x in raw_packet))
+        except IOError:
+            warn("unable to connect to %s:%d" % address)
             return
-        self._socket.setblocking(True)
-        self._socket.settimeout(3.0)
-        # raw send the Connect packet
-        connect_p = packet.Connect(key=client_key,version=encryption.version)
-        d = connect_p.raw()
-        if d is not None:
-            self._socket.sendall(d)
-        else:
-            warn("unable to form connect request")
-            return
-        # now we wait for ConnectResponse
-        self._connected = False
-        for attempt in range(3):
-            try:
-                raw_packet = self._socket.recv(MAX_PACKET_SIZE)
-            except timeout:
-                continue
-            # ensure we got the ConnectResponse packet
-            if raw_packet[:2] == '\x00'+packet.ConnectResponse._id:
-                p = packet.ConnectResponse(raw_packet)
-                self._enc = encryption(client_key,p.server_key)
-                self._connected = True
-                break
         # the connection handshake is done, if it worked then we spawn threads
         if self._connected:
+            info("connection succeeded")
             self._spawn_threads()
         else:
             warn("connection failed")
@@ -378,9 +370,11 @@ class Client(object):
         This takes the accumulated chunks, adds this last one, and processes
         the content as a single packet.
         """ 
+        
         p = packet.ChunkTail(raw_packet)
         self._chunks.append(p.tail)
         all_chunks = ''.join(self._chunks)
+        debug("got tail total length: %d" % len(all_chunks))
         self._process_packet(all_chunks)
         self._chunks = []
     

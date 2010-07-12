@@ -101,9 +101,12 @@ class Packet(object):
 
     def _all_format(self):
         """ Return the full format string for pack/unpack. """
-        fmt = "<" + ("B" * len(self._id))
-        if self._prefix is not None:
-            fmt += "B" * len(self._prefix)
+        fmt = "<"
+        # really, these if's are superfluous, but it improves readability
+        if len(self._id) > 0:
+            fmt += ("B" * len(self._id))
+        if len(self._prefix) > 0:
+            fmt += ("B" * len(self._prefix))
         return fmt + self._format
 
     def _all_values(self):
@@ -128,7 +131,10 @@ class Packet(object):
         s = self.__class__.__name__+"\n"
         if len(self._prefix) > 0:
             s += "_prefix=0x%02X; " % ord(self._prefix)
-        s += "._id=0x%02X, len=%d\n" % (ord(self._id),len(self.raw()))
+        if len(self._id) > 0:
+            s += "._id=0x%02X, len=%d\n" % (ord(self._id),len(self.raw()))
+        else:
+            s += "len=%d\n" % (len(self.raw()))
         s += '\traw: ' 
         s += ' '.join([x.encode("hex") for x in self.raw()])
         if len(self._components) > 0:
@@ -196,7 +202,7 @@ class Chunk(CorePacket):
 class ChunkTail(CorePacket):
     _id = '\x09'
 
-class Stream(CorePacket):
+class StreamRequest(CorePacket):
     _id = '\x0A'
     _format = "I"
     _components = ["total_length"]
@@ -205,24 +211,26 @@ class Stream(CorePacket):
 class StreamCancelRequest(CorePacket):
     _id = '\x0B'
 
-class StreamCancelACK(CorePacket):
+class StreamCancelRequestACK(CorePacket):
     _id = '\x0C'
 
 class Cluster(CorePacket):
     _id = '\x0E'
 
-# unknown / guesses
+# continuum sends
 class _ContEncResponse(CorePacket):
     _id = '\x10'
-    _format = "10s"
-    _components = ["unknown"]
+    _format = "II"
+    _components = ["key1", "key2"]
     unknown = ""
+    key1 = 0
+    key2 = 0
 
 class _ContEncResponseACK(CorePacket):
     _id = '\x11'
-    _format = "6s"
-    _components = ["unknown"]
-    unknown = ""
+    _format = "I"
+    _components = ["key1"]
+    key1 = 0
 
 def main():
     d = "00 06 6b 33 01 00 4f df 17 78"

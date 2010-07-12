@@ -1,7 +1,7 @@
 """
 This module implements the core protocol used by subspace atop UDP.
 
-net.Client and net.Server handle all core UDP packets (i.e. those beginning
+core.client and core.server handle all core UDP packets (i.e. those beginning
 with \x00).  Any other packets, e.g. subspace.billing.packet or 
 subspace.game.packet, are queued for another class to handle via .recv() or
 to emit via .send().
@@ -18,15 +18,15 @@ after it is .accept()ed.
 from subspace.core import packet
 from subspace.core.encryption import VIE
 from subspace.core.util import now
-from socket import socket,timeout,AF_INET,SOCK_DGRAM,SOL_SOCKET, SO_REUSEADDR
+from socket import socket,timeout,AF_INET,SOCK_DGRAM,SOL_SOCKET,SO_REUSEADDR
 from select import select
-from SocketServer import UDPServer, BaseRequestHandler
-from threading import Thread, Lock, Event
+from threading import Thread, RLock, Event
 from Queue import Queue, Empty, Full
 from time import time, sleep
 from logging import warn, info, debug
 
 MAX_PACKET_SIZE = 512 # we grab up to this many bytes from the socket at a time
+CHUNK_SIZE = 480 # this is the size of the chunks to send when chunking
 QUEUE_SIZE_IN = 500 # the number of incoming packets to queue before dropping 
 QUEUE_SIZE_OUT = 500 # same, but for outgoing packets
 SYNC_PERIOD = 5.0 # seconds between Sync's (see _sync)
@@ -37,7 +37,7 @@ class Server:
 
     def __init__(self, address):
         self._connections = {} # all active {client_address:CoreConnection}
-        self._connections_lock = Lock() # so rel thread can grab it to resend
+        self._connections_lock = RLock() # so rel thread can grab it to resend
         self._server_socket = socket(AF_INET,SOCK_DGRAM)
         self._server_socket.setsockopt(SOL_SOCKET, SO_REUSEADDR, 1)
         self._server_socket.bind(address)
@@ -57,9 +57,16 @@ class Server:
     def __str__(self):
         return "Core:Server(%s:%d)" % self.address
 
-    def send(self, address, packet, reliable=False):
+    def send(self, address, packet, reliable = False):
         if address in self._connections:
             self._connections[address].send(packet, reliable)
+            return True
+        else:
+            return False
+    
+    def send_chunked(self, address, packet):
+        if address in self._connections:
+            self._connections[address].send_chunked(packet)
             return True
         else:
             return False
@@ -93,12 +100,14 @@ class Server:
         This notifies the started threads that the server is shutting down and
         waits for them to join.
         """
-        debug("shutting down")
+        debug("shutting down core server")
         self._shutting_down.set()
         with self._connections_lock:
-            for address in self._connections.iterkeys():
-                self._server_socket.sendto(packet.Disconnect().raw(),address)
-        debug("joining threads")
+            conns = self._connections.keys()[:]
+        # we duplicate the connection address list so we can release the lock
+        for address in conns:
+            self.disconnect(address, notify=True)
+        debug("joining core server threads")
         for thread_name,thread in self._threads.iteritems():
             thread.join(3.0) # give it 3s to join
 
@@ -106,7 +115,7 @@ class Server:
         """ This grabs from the outgoing queues and sends them. """
         while True:                 
             with self._connections_lock:
-                conn_pairs = self._connections.items()
+                conn_pairs = self._connections.items()[:]
             sent_any = False
             for address, conn in conn_pairs:
                 try:
@@ -123,7 +132,7 @@ class Server:
                 if sent_any: 
                     info("continuing send loop despite shutdown to flush out")
                 else:
-                    break # we only exit when we are done sending
+                    return # we only exit when we are done sending
             else:
                 sleep(0.001)
 
@@ -149,7 +158,7 @@ class Server:
             try:
                 conn.receive_incoming_packet(raw_packet)
             except Exception as err:
-                warn("Error receiving incoming packet %s" % 
+                warn("error receiving incoming packet %s" % 
                         ' '.join([x.encode("hex") for x in raw_packet]))
                 warn("%s" % err)
 
@@ -163,9 +172,33 @@ class Server:
             sleep(1.0)
 
 class CoreConnection:
+    """
+    This is a single client connected to the server.  It is made unique by the
+    client_address tuple (ip, port).  It provides the methods for interacting
+    with this particular client.
     
+    It can do 3 things: 
+        1. send -- which sends a packet to this client,
+        2. receive_incoming_packet -- which accepts and processes a packet, and
+        3. check_reliable_resend -- which resends any unacknowledged reliables
+        
+    When a packet is sent (.send()) it is encrypted and added to the
+    server's outgoing queue.  If it is a reliable send, then it is wrapped as
+    such before encryption.
     
-    def __init__(self,client_address, server):
+    When a packet is received (.receive_incoming_packet()) it is decrypted and
+    then processed.  If it is a core packet, it is handled internally.  If it
+    is a game packet, then it is added to the server's incoming queue and
+    tagged as coming from this client's address.
+    
+    When .check_reliable_resend() is invoked, it cycles through the list of
+    reliable packets previously sent and checks whether they have timed out 
+    (i.e. if the client has not acknowledged receipt).  Any that have so 
+    expired are resent.  NOTE: .check_reliable_resend() is threadsafe 
+    vis-a-vis .send().  
+    """
+    
+    def __init__(self, client_address, server):
         self.address = client_address
         self.server = server
         self._out = Queue(QUEUE_SIZE_OUT)
@@ -177,7 +210,7 @@ class CoreConnection:
         # 2:_handle_reliable_ack -- to remove now-acknowledged reliable packets
         # 3:_reliable_loop       -- to resend unacknowledged rel packets
         self._reliable_out = []
-        self._reliable_out_lock = Lock()
+        self._reliable_out_lock = RLock()
         self._reliable_out_seq = 0
         # payload accumulates in _handle_chunk and _handle_chunk_tail
         self._chunks = [] 
@@ -191,20 +224,23 @@ class CoreConnection:
         # into this dispatch table.  see _process_core_packet
         self._handlers = {
             # Connect & ConnectResponse are already handled
-            packet.Connect._id      : self._handle_connect,
-            packet.Reliable._id     : self._handle_reliable,
-            packet.ReliableACK._id  : self._handle_reliable_ack,
-            packet.Sync._id         : self._handle_sync,
-            packet.SyncResponse._id : self._handle_sync_response,
-            packet.Disconnect._id   : self._handle_disconnect,
-            packet.Chunk._id        : self._handle_chunk,
-            packet.ChunkTail._id    : self._handle_chunk_tail,
-            packet.Cluster._id      : self._handle_cluster,
+            packet.Connect._id             : self._handle_connect,
+            packet.Reliable._id            : self._handle_reliable,
+            packet.ReliableACK._id         : self._handle_reliable_ack,
+            packet.Sync._id                : self._handle_sync,
+            packet.SyncResponse._id        : self._handle_sync_response,
+            packet.Disconnect._id          : self._handle_disconnect,
+            packet.Chunk._id               : self._handle_chunk,
+            packet.ChunkTail._id           : self._handle_chunk_tail,
+            packet.StreamRequest._id       : self._handle_stream_request,
+            packet.StreamCancelRequest._id : self._handle_stream_cancel_request,
+            packet.Cluster._id             : self._handle_cluster,
             }
 
-    def send(self,outgoing_packet,reliable=False):
+    def send(self, outgoing_packet, reliable=False):
         """ 
-        This adds a packet to the outgoing queue and immediately returns.
+        This sends the packet to this client.
+        It adds the packet to the outgoing queue and immediately returns.
         NOTE: packet is not raw data, it is a packet class having member .raw()
         """
         if reliable:
@@ -222,6 +258,26 @@ class CoreConnection:
         except Full:
             warn("outgoing queue full, discarding packet:\n %s"\
                                      % outgoing_packet)
+    
+    def send_chunked(self, outgoing_packet):
+        """
+        This sends a large packet to the client in reliable chunks.  It is 
+        used, for example, to send ArenaSettings.
+        """
+        data = outgoing_packet.raw()
+        data_length = len(data)
+        if data_length < CHUNK_SIZE: # don't chunk it if we don't have to
+            self.send(outgoing_packet, reliable=True)
+        else: 
+            index = 0 # use index to avoid too many copies of the data
+            while data_length - index > CHUNK_SIZE:
+                p = packet.Chunk()
+                p.tail = data[index:index+CHUNK_SIZE]
+                index += CHUNK_SIZE
+                self.send(p, reliable=True)
+            p = packet.ChunkTail()
+            p.tail = data[index:]
+            self.send(p, reliable=True)  
     
     def receive_incoming_packet(self, packet_data):
         """ 
@@ -243,9 +299,9 @@ class CoreConnection:
                 if now() - p._last_send_time > RELIABLE_TIMEOUT_RESEND:
                     # NOTE: resend must not be reliable else this will deadlock
                     self.send(p,reliable=False)
-                    p._last_send_time = now
+                    p._last_send_time = now()
 
-    def _encrypt_packet(self,packet_data):
+    def _encrypt_packet(self, packet_data):
         """
         This doesn't encrypt the first byte of any packet.  And for core 
         packets, it doesn't encrypt the first 2 bytes.
@@ -263,7 +319,7 @@ class CoreConnection:
             else:
                 return packet_data[:unencrypted_prefix_size] + encrypted_data
 
-    def _decrypt_packet(self,packet_data):
+    def _decrypt_packet(self, packet_data):
         """ This doesn't decrypt certain leading bytes, as in _encrypt. """
         unencrypted_prefix_size = 1
         if packet_data[0] == '\x00': # core packets have an extra byte prefix
@@ -278,7 +334,7 @@ class CoreConnection:
         else:
             return packet_data[:unencrypted_prefix_size] + decrypted_data
 
-    def _process_packet(self,packet_data):
+    def _process_packet(self, packet_data):
         """ This processes any core \x00 packets, and queues all others. """
         if packet_data[0] == '\x00':
             self._process_core_packet(packet_data)
@@ -316,7 +372,7 @@ class CoreConnection:
             self.send(packet.ReliableACK(seq=self._reliable_in_seq))
             self._reliable_in_seq += 1
 
-    def _handle_connect(self,raw_data):
+    def _handle_connect(self, raw_data):
         """
         This receives the incoming Connect packet.  It responds with the
         ConnectReponse.
@@ -333,7 +389,7 @@ class CoreConnection:
 #        """ This receives the connection response. """
 #        p = packet.ConnectResponse(raw_data)
 
-    def _handle_reliable(self,raw_data):
+    def _handle_reliable(self, raw_data):
         """
         This receives any incoming reliable packet.  It adds the new reliable
         packet to the incoming reliable list, and processes any reliable
@@ -349,7 +405,7 @@ class CoreConnection:
             warn("outgoing reliable queue getting large seq=%d,size=%d" % \
                   (self._reliable_in_seq,len(self._reliable_in)))
 
-    def _handle_reliable_ack(self,raw_data):
+    def _handle_reliable_ack(self, raw_data):
         """
         This Handles incoming ACKs for reliable packets we earlier sent. This
         ensures we stop waiting for acknowledgements about packets that we now
@@ -363,19 +419,19 @@ class CoreConnection:
                     if out_p.seq <= p.seq:
                         self._reliable_out.remove(out_p)
                                            
-    def _handle_sync(self,raw_packet):
+    def _handle_sync(self, raw_packet):
         """ This receives the Sync packet and responds with a SyncResponse. """
         p = packet.Sync(raw_packet)
         sync_resp = packet.SyncResponse(remote_time=p.sender_time,
                                         sender_time=now())
         self.send(sync_resp)
 
-    def _handle_sync_response(self,raw_packet):
+    def _handle_sync_response(self, raw_packet):
         """ This receives SyncResponses to our earlier Sync requests. """
         p = packet.SyncResponse(raw_packet)
         # TODO: store or do something to synchronize
 
-    def _handle_disconnect(self,raw_packet):
+    def _handle_disconnect(self, raw_packet):
         """ 
         This propagates the disconnect notification by setting the flag in
         self._disconnecting.  The threads for sending and receiving both loop
@@ -388,13 +444,13 @@ class CoreConnection:
         self.server.disconnect(self.address,
                     notify=False) # they sent Disconnect, so no need to notify
 
-    def _handle_chunk(self,raw_packet):
+    def _handle_chunk(self, raw_packet):
         """ This handles accumulating chunks. """
         p = packet.Chunk(raw_packet)
         # TODO: should probably do some checks to avoid an unending chunk
         self._chunks.append(p.tail)
 
-    def _handle_chunk_tail(self,raw_packet):
+    def _handle_chunk_tail(self, raw_packet):
         """ 
         This takes the accumulated chunks, adds this last one, and processes
         the content as a single packet.
@@ -405,7 +461,17 @@ class CoreConnection:
         self._process_packet(all_chunks)
         self._chunks = []
     
-    def _handle_cluster(self,raw_packet):
+    def _handle_stream_request(self, raw_packet):
+        p = packet.StreamRequest(raw_packet)
+        # TODO: handle stream requests (must investigate first)
+        debug("got stream request: %s" % p)
+    
+    def _handle_stream_cancel_request(self, raw_packet):
+        p = packet.StreamCancelRequest(raw_packet)
+        debug("got stream cancel request, acknowledging")
+        self.send(packet.StreamCancelRequestACK(), reliable = True)
+    
+    def _handle_cluster(self, raw_packet):
         """ This takes a cluster and processes the packets inside. """
         p = packet.Cluster(raw_packet)
         d = p.tail
@@ -417,13 +483,18 @@ class CoreConnection:
 
 def main():
     import logging
-    from subspace.core.net import Client
+    from subspace.core.client import Client
     logging.basicConfig(level=logging.DEBUG,
-            format="%(levelname)-7.7s:<%(threadName)15.15s > %(message)s")
+            format="<%(threadName)25.25s > %(message)s")
     s = Server(("",5000))
-    for n in range(20):
-        c = Client(("127.0.0.1",5000))
-    sleep(10)
+    c = [] # joined clients
+    for n in range(10):
+        print "Client connecting ..."
+        c.append(Client(("127.0.0.1",5000)))
+    sleep(3)
+    for client in c:
+        print "Client leaving ..."
+        client.close()
     s.shutdown()
     
 if __name__ == '__main__':
