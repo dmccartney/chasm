@@ -17,7 +17,7 @@ after it is .accept()ed.
 """
 from subspace.core import packet
 from subspace.core.encryption import VIE
-from subspace.core.util import now
+from subspace.util import now
 from socket import socket,timeout,AF_INET,SOCK_DGRAM,SOL_SOCKET,SO_REUSEADDR
 from select import select
 from threading import Thread, RLock, Event
@@ -50,7 +50,7 @@ class Server:
             "rel"  : Thread(target=self._reliable_resend_loop,name="Server:Core:rel")
             }
         self._shutting_down = Event() # this is set to tell the threads to end
-        debug("starting server threads")
+        info("starting core server %s" % self)
         for thread_name,thread in self._threads.iteritems():
             thread.start()
     
@@ -63,7 +63,17 @@ class Server:
             return True
         else:
             return False
-    
+
+    def send_to_many(self, addresses, packet, reliable = False):
+        """ 
+        This permits more efficient sending of the same packet to many 
+        addresses.
+        """
+        packet.raw(final_form = True)
+        for address in addresses:
+            self.send(address, packet, reliable)
+        packet.has_final = False
+            
     def send_chunked(self, address, packet):
         if address in self._connections:
             self._connections[address].send_chunked(packet)
@@ -93,6 +103,7 @@ class Server:
             if address in self._connections:
                 if notify:
                     self.send(address, packet.Disconnect()) # let them know
+                    self.send(address, packet.Disconnect()) # let them know
                 del self._connections[address]
         
     def shutdown(self):
@@ -103,11 +114,10 @@ class Server:
         debug("shutting down core server")
         self._shutting_down.set()
         with self._connections_lock:
+            # make copy so we can iterate and delete
             conns = self._connections.keys()[:]
-        # we duplicate the connection address list so we can release the lock
-        for address in conns:
-            self.disconnect(address, notify=True)
-        debug("joining core server threads")
+            for address in conns:
+                self.disconnect(address, notify = True)
         for thread_name,thread in self._threads.iteritems():
             thread.join(3.0) # give it 3s to join
 
@@ -123,7 +133,7 @@ class Server:
                 except Empty:
                     continue
                 try:
-                    self._server_socket.sendto(p._encrypted,address)
+                    self._server_socket.sendto(p._encrypted, address)
                     sent_any = True
                 except timeout:
                     warn("socket send failure")
@@ -258,7 +268,7 @@ class CoreConnection:
         except Full:
             warn("outgoing queue full, discarding packet:\n %s"\
                                      % outgoing_packet)
-    
+
     def send_chunked(self, outgoing_packet):
         """
         This sends a large packet to the client in reliable chunks.  It is 

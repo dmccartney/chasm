@@ -98,6 +98,11 @@ class Packet(object):
             values = values[len(self._id):] # self._id
             components.update(dict(zip(self._components,values)))
         self.__dict__.update(components)
+        # these two enable caching of "final" raw outcome.
+        # when raw(final_form = True) is invoked, it will cache the raw output
+        # and return self.final_raw each subsequent time.
+        self.has_final = False
+        self.final_raw = None
 
     def _all_format(self):
         """ Return the full format string for pack/unpack. """
@@ -115,8 +120,16 @@ class Packet(object):
         v.extend([getattr(self,k) for k in self._components])
         return v
 
-    def raw(self):
-        """ This returns the raw packet data, for transmission. """
+    def raw(self, final_form = False):
+        """ 
+        This returns the raw packet data, for transmission.
+        If final_form is True, then this will cache the raw transform and
+        future calls to raw() will return the final value.
+        This is useful when the same packet will be sent many times 
+        (e.g. Position packets to everyone in the arena).
+        """
+        if self.has_final:
+            return self.final_raw
         try:
             result = pack(self._all_format(),*self._all_values()) + self.tail
         except:
@@ -124,6 +137,9 @@ class Packet(object):
                  (self.__class__.__name__,
                   self._all_format(),))
             result = ''
+        if final_form:
+            self.has_final = True
+            self.final_raw = result
         return result
 
     def __str__(self):
