@@ -1,9 +1,8 @@
-
 """
 I swiped some ideas for ball game logic from asss/src/core/balls.c
 
 C2SPacket:
-    BallPosition: ball_id, x, y, dx, dy, my_player_id, time
+    BallPosition: ball_id, x, y, dx, dy, time, my_player_id
     BallPickupRequest: ball_id, time
     BallGoal: ball_id, x, y
 
@@ -11,10 +10,13 @@ S2CPacket:
     BallPosition: ball_id, x, y, dx, dy, time
     BallGoal: freq, points
 
-BallGames have a Group  are attached to a Group of players.
-If players are in the Group, or are one of its spectators, then they receive
+----
+
+Arena's control who can observe a BallGame.
+If players are in the Group, or are one of its spectators, then they receive 
 ball updates as normal.
-If players or spectators do not belong to the group, then they receive (something else -- a summary?)
+If players or spectators do not belong to the group, then they receive . . . 
+(something else -- a summary?)
 
 Ball States:
     NONE
@@ -32,6 +34,19 @@ Handle Goal (C2S: BallGoal): the player is claiming to have scored a goal
         phase the ball
         set ball to WAITING
         set ball last_carrier to None
+
+Handle Pickup Request (C2S: BallPickupRequest): the player wants to pick it up
+    if the ball is valid and
+    if the player is in the game and
+    if the player is not already carrying a ball:
+        set ball to CARRIED
+        set ball last_carrier to player
+        set ball x/y to player's x/y
+        set ball dx/dy to 0
+        set ball freq to player's freq
+        set ball time to 0
+        set ball last send time to now()
+        ball.send_position
 
 Timer (constantly cycling):
     for ball_game in ball_games:
