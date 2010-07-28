@@ -1,0 +1,33 @@
+(Scattered brainstorming)
+
+Subgame, ASSS, Continuum, and the original Subspace client combine arena and
+player lists.  Thus in a given arena there is a set of players and anything 
+that happens inside the arena is visible, more or less, to the entire arena.
+
+Some exceptions are events that clients see differently based on their team 
+(like stealth, cloak, ship colors etc.) or if they are in spectator mode.  But
+for the most part, there are arenas, and you get updates on everything 
+happening in your arena.
+
+In chasm's game server, I separate "groups of players" (who all can see each 
+other's activities) from "arenas" (which now contain these groups).
+The idea is to allow concurrent games in a single arena such that people in
+each game (and those spectating) can see only their group's activities but
+still chat with players in the arena who happen to be in another group.
+
+Groups need not be mutually exclusive.  So players in an arena can belong to
+one or many groups.
+
+TODO: explain and improve this config file
+---
+arenas:
+    - name: smallpub
+      groups:
+        - name: Game A
+          type: powerball_small
+          members: ship1, ship2
+        - name: Game B
+          type: powerball_small
+          members: ship3, ship4
+
+public_arena: smallpub
