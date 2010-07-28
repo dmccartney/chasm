@@ -10,10 +10,10 @@ class FlagGame:
     This handles all flag packets to implement the basics of the flag game.
     """
     flags = []
-    def __init__(self,player):
+    def __init__(self, player):
         self._player = player
         handlers = {
-            s2c_packet.FlagClaim._id        : self._handle_flag_claim,
+            s2c_packet.FlagPickup._id       : self._handle_flag_pickup,
             s2c_packet.FlagDrop._id         : self._handle_flag_drop,
             s2c_packet.FlagVictory._id      : self._handle_flag_victory,
             s2c_packet.FlagPosition._id     : self._handle_flag_position,
@@ -30,8 +30,8 @@ class FlagGame:
         debug("flag victory (freq=%d,points=%d)" % (p.freq,p.points))
         # TODO: reset flag game internally
         
-    def _handle_flag_claim(self,raw_packet):
-        p = s2c_packet.FlagClaim(raw_packet)
+    def _handle_flag_pickup(self,raw_packet):
+        p = s2c_packet.FlagPickup(raw_packet)
         debug("player (id=%d) picked up flag (id=%d)" % \
                 (p.player_id,p.flag_id))
         # TODO: track flags, issue events

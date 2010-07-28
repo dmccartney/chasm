@@ -4,135 +4,12 @@ http://wiki.minegoboom.com/index.php/UDP_Game_Protocol
 http://d1st0rt.sscentral.com/packets.html
 """
 from subspace.core.packet import Packet
-from struct import unpack_from, calcsize
+from struct import unpack_from, calcsize, pack
 
 class S2CPacket(Packet):
     pass
 
-class PlayerID(S2CPacket):
-    _id = '\x01'
-    _format = "H"
-    _components = ["player_id"]
-    player_id = 0
-
-class ArenaEntered(S2CPacket):
-    _id = '\x02'
-
-class PlayerEntering(S2CPacket):
-    _id = '\x03'
-    _format = "BB20s20sIIHHHHhHB"
-    _components = ["ship","accepts_audio","name","squad","kill_points",
-                   "flag_points","player_id","freq","wins","losses",
-                   "attached_to","flags_carried","misc_bits"]
-    player_id = 0
-    name = ""
-    squad = ""
-    freq = 8025
-    ship = 8
-    accepts_audio = 0
-    kill_points = 0
-    flag_points = 0
-    flags_carried = 0 # this is not authoritative
-    wins = 0
-    losses = 0
-    attached_to = -1 # -1 indicates "not attached"
-    misc_bits = 0
-
-class PlayerLeaving(S2CPacket):
-    _id = '\x04'
-    _format = "H"
-    _components = ["leaving_player_id"]
-    leaving_player_id = 0
-
-class Weapons(S2CPacket):
-    _id = '\x05'
-    _format = "bHhhHhBBBhHH" # + "HHHI"  # may not exist (ExtraPosData)
-    _components = ["direction","time","x","dy","player_id","dx",
-                   "checksum","status","c2s_latency","y","bounty",
-                   "weapons"] # + ExtraPosData (10 bytes)
-                    # TODO: implement ExtraPosData (asss/src/packets/ppk.h)
-    player_id = 0
-    x = 0 # 0-16384 
-    y = 0
-    dx = 0
-    dy = 0
-    bounty = 0
-    status = 0
-    energy = 1
-    weapons = 0
-    time = 0
-    checksum = 0
-    c2s_latency = 0
-    def weapon_info(self):
-        parts = [("type",5),
-                 ("level",2),
-                 ("shrapbouncing",1),
-                 ("shraplevel",2),
-                 ("shrap",5),
-                 ("multifire",1)]
-        types = {
-            1 : "Bullet",
-            2 : "Bouncing Bullet",
-            3 : "Bomb",
-            4 : "Proximity Bomb",
-            5 : "Repel",
-            6 : "Decoy",
-            7 : "Burst",
-            8 : "Thor" }
-        result = {}
-        d = self.weapons
-        for name,length in parts:
-            result[name] =  d & ((1 << length) - 1)
-            d >>= length
-        # pretty up the results, for now
-        result["type"] = types[result["type"]]
-        result["level"] += 1
-        result["shraplevel"] += 1
-        return result
-
-class Death(S2CPacket):
-    _id = '\x06'
-    _format = "BHHHH"
-    _components = ["green_id_produced","killer_player_id","killed_player_id",
-                   "bounty","flag_count"]
-    killer_player_id = 0
-    killed_player_id = 0
-    bounty = 0
-    flag_count = 0
-    green_id_produced = 0
-
-class ChatMessage(S2CPacket):
-    _id = '\x07'
-    _format = "BBH"
-    _components = ["type","sound","sending_player_id"]
-    type = 2    # 0 green, 1 pub macro, 2 pub msg, 3 freq msg, 4 p to freq,
-                # 5 priv, 6 red named, 7 remote priv, 8 red nameless, 9 channel
-    sound = 0
-    sending_player_id = 0
-    def message(self):
-        return self.tail.rstrip('\x00')
-
-class OtherGreenPickup(S2CPacket):
-    _id = '\x08'
-    _format = "IHHHH"
-    _components = ["time","x","y","prize_number","player_id"]
-    player_id = 0
-    prize_number = 0
-    x = 0
-    y = 0
-    time = 0
-
-class StatsUpdate(S2CPacket):
-    _id = '\x09'
-    _format = "HIIHH"
-    _components = ["player_id","flag_points","kill_points","kills","deaths"]
-    player_id = 0
-    flag_points = 0
-    kill_points = 0
-    kills = 0
-    deaths = 0
-
-class LoginResponse(S2CPacket):
+class SessionLoginResponse(S2CPacket):
     _id = '\x0A'
     _format = "BIB3xI5xBII8x"
     _components = ["response", "server_version", "is_vip","checksum_exe",
@@ -170,32 +47,100 @@ class LoginResponse(S2CPacket):
     checksum_code = 0xFFFFFFFF #0xF1429CE8 #0x281CC948
     checksum_news = 0xFFFFFFFF
 
-class BallGoal(S2CPacket):
-    _id = '\x0B'
+class SessionContVersion(S2CPacket):
+    _id = '\x34'
     _format = "HI"
-    _components = ["freq", "points"]
-    freq = 0
-    points = 0
+    _components = ["continuum_verison","continuum_exe_checksum"]
+    continuum_verison = 40
+    continuum_exe_checksum = 0xc9b61486
 
-class Voice(S2CPacket):
-    _id = '\x0C'
+class SessionPlayerID(S2CPacket):
+    """ This tells the client his own player ID. """
+    _id = '\x01'
     _format = "H"
     _components = ["player_id"]
-    # Voice.tail contains a .wav of the voice
-
-class FreqChange(S2CPacket):
-    _id = '\x0D'
-    _format = "HH"
-    _components = ["player_id","new_freq"]
     player_id = 0
-    new_freq = 0
 
-class CreateTurret(S2CPacket):
-    _id = '\x0E'
-    _format = "HH"
-    _components = ["rider_player_id","driver_player_id"]    
-    rider_player_id = 0 # the one requesting the attachment
-    driver_player_id = 0
+class SessionLoginComplete(S2CPacket):
+    _id = '\x31'
+
+class FileTransfer(S2CPacket):
+    """ 
+    This is used to transfer files to the client when needed.
+    On login, this is used to send news.txt and update.exe.
+    On arena entrance, this is used to send the lvl/lvz files.
+    """
+    _id = '\x10'
+    _format = "16s"
+    _components = ["file_name"]
+    # tail contains the file.  if no filename, this is news.txt
+    file_name = ""
+
+class ArenaPlayerEntering(S2CPacket):
+    """ 
+    This tells players already in the arena that a new player is entering.
+    The new player also gets a big list of these, one for each other player.
+    """
+    _id = '\x03'
+    _format = "BB20s20sIIHHHHhHB"
+    _components = ["ship","accepts_audio","name","squad","kill_points",
+                   "flag_points","player_id","freq","wins","losses",
+                   "attached_to","flags_carried","misc_bits"]
+    player_id = 0
+    name = ""
+    squad = ""
+    freq = 8025
+    ship = 8
+    accepts_audio = 0
+    kill_points = 0
+    flag_points = 0
+    flags_carried = 0 # this is not authoritative
+    wins = 0
+    losses = 0
+    attached_to = -1 # -1 indicates "not attached"
+    misc_bits = 0
+
+class ArenaEntranceComplete(S2CPacket):
+    _id = '\x02'
+
+class ArenaPlayerLeaving(S2CPacket):
+    _id = '\x04'
+    _format = "H"
+    _components = ["leaving_player_id"]
+    leaving_player_id = 0
+
+class ArenaMapFileVIE(S2CPacket):
+    """ See ContMapInformation for the more featureful new packet form. """
+    _id = '\x29'
+    _format = "16sI"
+    _components = ["map_file_name", "map_checksum"]
+    map_file_name = "default.lvl"
+    map_checksum = 0xffffffff
+
+class ArenaMapFilesCont(ArenaMapFileVIE):
+    """ 
+    Continuum clients accept up to 17 tuples of (filename, checksum, size).
+    """
+    _id = '\x29'
+    _format = "" # the tail contains the tuples of file info for Cont
+    _components = []
+    
+    def add_file(self, name, checksum, size):
+        if len(self.tail) < 17 * calcsize("16sII"):
+            self.tail += pack("16sII", name, checksum, size)
+            
+    def get_files(self):
+        """ 
+        This returns a list of tuples.  Each tuple contains filename, 
+        checksum, and size.
+        """
+        result = []
+        i = 0
+        file_info_length = calcsize("16sII")
+        while len(self.tail) >= i + file_info_length:
+            result.append(unpack_from("16sII", self.tail))
+            i += file_info_length
+        return result
 
 class ArenaSettings(S2CPacket):
     _id = '\x0F'
@@ -264,95 +209,17 @@ class ArenaSettings(S2CPacket):
                         (((mask << shift) & w) >> shift) 
         return result
 
-class FileTransfer(S2CPacket):
-    _id = '\x10'
-    _format = "16s"
-    _components = ["file_name"]
-    # tail contains the file.  if no filename, this it is news.txt
-    file_name = ""
+class ArenaAd(S2CPacket):
+    _id = '\x30'
+    _format = "BHHI"
+    _components = ["mode","width","height","duration"]
+    mode = 0
+    width = 0
+    height = 0
+    duration = 0
 
-class FlagPosition(S2CPacket):
-    _id = '\x12'
-    _format = "HHHH"
-    _components = ["flag_id","x","y","freq_owner"]
-    flag_id = 0
-    x = 0
-    y = 0
-    freq_owner = 0xFFFF # 0xFFFF == neutral flags
-
-class FlagClaim(S2CPacket):
-    _id = '\x13'
-    _format = "HH"
-    _components = ["flag_id","player_id"]
-    player_id = 0
-    flag_id = 0
-
-class FlagVictory(S2CPacket):
-    _id = '\x14'
-    _format = "HI"
-    _components = ["freq","points"]
-    freq = 0
-    points = 0
-
-class DestroyTurret(S2CPacket):
-    _id = '\x15'
-    _format = "H"
-    _component = ["player_id"]
-    player_id = 0 # former driver, shaking off turrets
-
-class FlagDrop(S2CPacket):
-    _id = '\x16'
-    _format = "H"
-    _component = ["player_id"]
-    player_id = 0 # former flag carrier, dropping flags
-
-class SecurityRequest(S2CPacket):
-    _id = '\x18'
-    _format = "IIII"
-    _components = ["green_seed","door_seed","time","checksum_key"]
-    green_seed = 0
-    door_seed = 0
-    time = 0
-    checksum_key = 0
-
-class RequestFile(S2CPacket):
-    _id = '\x19'
-    _format = "256s16s"
-    _components = ["local_file","remote_file"]
-    # i.e. *putfile
-    local_file = ""
-    remote_file = ""
-
-class ResetScores(S2CPacket):
-    _id = '\x1A'
-    _format = "H"
-    _components = ["player_id"]
-    player = 0 # 0xFFFF means all players
-
-class PersonalShipReset(S2CPacket):
-    _id = '\x1B'
-
-class SpecData(S2CPacket):
-    _id = '\x1C'
-    _format = "B"
-    _components = ["is_someone_watching"]
-    is_someone_watching = False # if yes, should probably send extra pos data
-
-class FreqShipChange(S2CPacket):
-    _id = '\x1D'
-    _format = "BHH"
-    _components = ["ship","player_id","freq"]
-    player_id = 0
-    ship = 0
-    freq = 0
-
-class SelfGreenPickup(S2CPacket):
-    _id = '\x20'
-    _format = "H"
-    _components = ["type"]
-    prize_number = 0
-
-class BrickDropped(S2CPacket):
+class ArenaBrickDropped(S2CPacket):
+    """ TODO: don't reimplement the asss brick bug. """
     _id = '\x21'
     def brick_list(self):
         results = []
@@ -366,22 +233,20 @@ class BrickDropped(S2CPacket):
             d = d[l:]
         return results
 
-class KeepAlive(S2CPacket):
-    _id = '\x27'
-
-class SmallPosition(S2CPacket):
+class PlayerPosition(S2CPacket):
     _id = '\x28'
-    _format = "BHHBBBBHHH" # + "HHHI"  # may not exist (ExtraPositionData)
-    _components = ["direction","time","x","ping","bounty","player_id","togglables",
-                   "dy","y","dx"]
+    _format = "bHhBBBBhhh" # + "HHHI"  # may not exist (ExtraPositionData)
+    _components = ["rotation", "time", "x", "ping", "bounty", "player_id",
+                   "status", "dy", "y", "dx"]
                     # + ["energy2", "s2c_latency", "timer", "item_info"]
     player_id = 0
     x = 0 # 0-16384 
     y = 0
+    rotation = 0 # 0-63
     dx = 0
     dy = 0
     bounty = 0
-    togglables = 0
+    status = 0
     time = 0
     ping = 0
     # energy2 = 0
@@ -389,12 +254,205 @@ class SmallPosition(S2CPacket):
     # timer = 0
     # item_info = 0
 
-class MapInformation(S2CPacket):
-    _id = '\x29'
-    _format = "16sI"
-    _components = ["map_file_name","map_checksum"]
-    map_file_name = ""
-    map_checksum = 0
+class PlayerPositionWeapon(S2CPacket):
+    _id = '\x05'
+    _format = "bHhhHhBBBhHH" # + "HHHI"  # may not exist (ExtraPosData)
+    _components = ["rotation","time","x","dy","player_id","dx",
+                   "checksum","status","ping","y","bounty",
+                   "weapon_info"] # + ExtraPosData (10 bytes)
+    player_id = 0
+    x = 0 # 0-16384 
+    y = 0
+    rotation = 0
+    dx = 0
+    dy = 0
+    time = 0
+    bounty = 0
+    status = 0
+
+    checksum = 0
+    ping = 0
+    # This can be fully interpreted by class subspace.game.weapon.WeaponInfo
+    # and it can be quickly checked with method subspace.game.weapon.has_weapon()
+    weapon_info = 0 
+
+    def calculate_checksum(self):
+        self.checksum = 0
+        # we only do the checksum on the first 21 bytes
+        # i.e. no checksum on the ExtraPosData
+        for c in self.raw()[:21]:
+            self.checksum ^= ord(c)
+            
+    # TODO: implement ExtraPosData (asss/src/packets/ppk.h)
+    # struct ExtraPosData /* 10 bytes */
+    #    { u16 energy; u16 s2cping; u16 timer;
+    #      u32 shields : 1; u32 super : 1; u32 bursts : 4;
+    #      u32 repels : 4; u32 thors : 4; u32 bricks : 4;
+    #      u32 decoys : 4; u32 rockets : 4; u32 portals : 4;
+    #      u32 padding : 2;
+    #    };
+
+class PlayerDeath(S2CPacket):
+    _id = '\x06'
+    _format = "BHHHH"
+    _components = ["green_id_produced","killer_player_id","killed_player_id",
+                   "bounty","flag_count"]
+    killer_player_id = 0
+    killed_player_id = 0
+    bounty = 0
+    flag_count = 0
+    green_id_produced = 0
+
+class PlayerChatMessage(S2CPacket):
+    _id = '\x07'
+    _format = "BBH"
+    _components = ["type","sound","sending_player_id"]
+    type = 2    # 0 green, 1 pub macro, 2 pub msg, 3 freq msg, 4 p to freq,
+                # 5 priv, 6 red named, 7 remote priv, 8 red nameless, 9 channel
+    sound = 0
+    sending_player_id = 0
+    def message(self, message = None):
+        if message is not None:
+            self.tail = message + '\x00'
+        return self.tail.rstrip('\x00')
+
+class PlayerGreen(S2CPacket):
+    _id = '\x08'
+    _format = "Ihhhh"
+    _components = ["time","x","y","prize_number","player_id"]
+    player_id = 0
+    prize_number = 0
+    x = 0
+    y = 0
+    time = 0
+
+class PlayerStatsUpdate(S2CPacket):
+    _id = '\x09'
+    _format = "HIIHH"
+    _components = ["player_id","flag_points","kill_points","kills","deaths"]
+    player_id = 0
+    flag_points = 0
+    kill_points = 0
+    kills = 0
+    deaths = 0
+
+class PlayerVoice(S2CPacket):
+    _id = '\x0C'
+    _format = "H"
+    _components = ["player_id"]
+    # Voice.tail contains a .wav of the voice
+
+class PlayerFreqChange(S2CPacket):
+    _id = '\x0D'
+    _format = "HH"
+    _components = ["player_id","new_freq"]
+    player_id = 0
+    new_freq = 0
+
+class PlayerCreateTurret(S2CPacket):
+    _id = '\x0E'
+    _format = "HH"
+    _components = ["rider_player_id","driver_player_id"]    
+    rider_player_id = 0 # the one attaching
+    driver_player_id = 0
+
+class PlayerDestroyTurret(S2CPacket):
+    _id = '\x15'
+    _format = "H"
+    _component = ["player_id"]
+    driver_player_id = 0 # former driver, shaking off turrets
+
+class PlayerResetScore(S2CPacket):
+    _id = '\x1A'
+    _format = "H"
+    _components = ["player_id"]
+    player = 0 # 0xFFFF means all players
+
+
+class PlayerFreqShipChange(S2CPacket):
+    _id = '\x1D'
+    _format = "BHH"
+    _components = ["ship","player_id","freq"]
+    player_id = 0
+    ship = 0
+    freq = 0
+
+class PersonalWarpTo(S2CPacket):
+    _id = '\x32'
+    _format = "HH"
+    _components = ["x","y"]
+    x = 0
+    y = 0
+    
+class PersonalSecuritySeeds(S2CPacket):
+    _id = '\x18'
+    _format = "IIII"
+    _components = ["green_seed","door_seed","time","checksum_key"]
+    green_seed = 0
+    door_seed = 0
+    time = 0
+    checksum_key = 0
+
+class PersonalRequestFile(S2CPacket):
+    _id = '\x19'
+    _format = "256s16s"
+    _components = ["local_file","remote_file"]
+    # i.e. *putfile
+    local_file = ""
+    remote_file = ""
+
+
+class PersonalShipReset(S2CPacket):
+    """ The server sends this to tell the client to reset his ship. """
+    _id = '\x1B'
+
+class PersonalBeingWatched(S2CPacket):
+    """ 
+    The server sends this to tell the client he is being spectated, thus he
+    needs to send extra data with his position packets.
+    """
+    _id = '\x1C'
+    _format = "B"
+    _components = ["is_someone_watching"]
+    is_someone_watching = False # if yes, should probably send extra pos data
+
+class PersonalGreen(S2CPacket):
+    _id = '\x20'
+    _format = "H"
+    _components = ["type"]
+    prize_number = 0
+
+class PersonalKeepAlive(S2CPacket):
+    _id = '\x27'
+
+class FlagPosition(S2CPacket):
+    _id = '\x12'
+    _format = "HHHH"
+    _components = ["flag_id","x","y","freq_owner"]
+    flag_id = 0
+    x = 0
+    y = 0
+    freq_owner = 0xFFFF # 0xFFFF == neutral flags
+
+class FlagPickup(S2CPacket):
+    _id = '\x13'
+    _format = "HH"
+    _components = ["flag_id","player_id"]
+    player_id = 0
+    flag_id = 0
+
+class FlagDrop(S2CPacket):
+    _id = '\x16'
+    _format = "H"
+    _component = ["player_id"]
+    player_id = 0 # former flag carrier, dropping flags
+
+class FlagVictory(S2CPacket):
+    _id = '\x14'
+    _format = "HI"
+    _components = ["freq","points"]
+    freq = 0
+    points = 0
 
 class BallPosition(S2CPacket):
     _id = '\x2E'
@@ -407,47 +465,48 @@ class BallPosition(S2CPacket):
     dy = 0
     time = 0
 
-class ZoneAd(S2CPacket):
-    _id = '\x30'
-    _format = "BHHI"
-    _components = ["mode","width","height","duration"]
-    mode = 0
-    width = 0
-    height = 0
-    duration = 0
-
-class LoginComplete(S2CPacket):
-    _id = '\x31'
-
-class WarpedTo(S2CPacket):
-    _id = '\x32'
-    _format = "HH"
-    _components = ["x","y"]
-    x = 0
-    y = 0
-
-class ContVersion(S2CPacket):
-    _id = '\x34'
+class BallGoal(S2CPacket):
+    _id = '\x0B'
     _format = "HI"
-    _components = ["continuum_verison","continuum_exe_checksum"]
-    continuum_verison = 40
-    continuum_exe_checksum = 0xc9b61486
+    _components = ["freq", "points"]
+    freq = 0
+    points = 0
 
-def main_settings_test():
+
+def test_arena_settings():
     t = '\x00' * 1428
     a = ArenaSettings('\x0F' + t)
     print a.get_ship_settings()
 
-def main():
+def test_chat_message():
     r = """
     07 00 00 ff ff 57 65 6c 63 6f 6d 65 20 74 6f 20
     41 53 57 5a 2e 20 20 68 74 74 70 3a 2f 2f 61 73
     77 7a 2e 6f 72 67 00
     """
     d = ''.join([b.decode('hex') for b in r.split()])
-    p = ChatMessage(d)
+    p = PlayerChatMessage(d)
     print p
     print p.tail.rstrip('\x00')
 
+def test_cont_map_info():
+    raw_cont_map_info = ''.join([chr(x) for x in 
+        [0x29, 0x61, 0x73, 0x77, 0x7a, 0x2e, 0x6c, 0x76, 
+         0x6c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 
+         0x00, 0x27, 0x27, 0x11, 0xb7, 0x9b, 0x8c, 0x00,
+         0x00]])
+    p1 = ArenaMapFilesCont(raw_cont_map_info)
+
+    p2 = ArenaMapFilesCont()
+    p2.add_file("aswz.lvl", 3071354663, 35995)
+    
+    assert p1.raw() == p2.raw()
+    
+    p2.add_file("other.lvz", 2123823234, 13555)
+    assert len(p2.get_files()) == 2
+
+    print p1
+    print p2
+
 if __name__ == '__main__':
-    main()
+    test_cont_map_info()

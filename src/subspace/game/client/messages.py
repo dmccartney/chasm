@@ -39,7 +39,7 @@ class Messenger:
     def __init__(self,player):
         self._player = player
         handlers = {
-            s2c_packet.ChatMessage._id      : self._handle_chat_message,
+            s2c_packet.PlayerChatMessage._id  : self._handle_player_chat_message,
             }
         self._player.add_packet_handlers(**handlers)
         self._message_handlers = {} 
@@ -78,8 +78,8 @@ class Messenger:
     def add_message_handler(self,message_type,hnd):
         self._message_handlers.setdefault(message_type,[]).append(hnd)
 
-    def _handle_chat_message(self,raw_packet):
-        p = s2c_packet.ChatMessage(raw_packet)
-        info("got chat message (type=0x%02X): %s" % (p.type,p.message()))
+    def _handle_player_chat_message(self,raw_packet):
+        p = s2c_packet.PlayerChatMessage(raw_packet)
+        info("got chat message (type=0x%02X): %s" % (p.type, p.message()))
         for hnd in self._message_handlers.get(p.type,[]):
             hnd(p) # we are adults, handlers can have at the actual packet

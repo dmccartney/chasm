@@ -4,17 +4,70 @@ http://wiki.minegoboom.com/index.php/UDP_Game_Protocol
 http://d1st0rt.sscentral.com/packets.html
 """
 from subspace.core.packet import Packet
+from subspace.core.checksum import exe_checksum
 
 class C2SPacket(Packet):
     pass
 
-class ArenaLogin(C2SPacket):
+class SessionLoginVIE(C2SPacket):
+    """ Original login packet -- like Cont, without the 64 byte tail. """ 
+    _id = '\x09'
+    _format = "B32s32sIBhxxhIII"+"12x"
+    _components = ["is_new_user", "name", "password", "machine_id",
+                   "connection_type", "time_zone_bias", "client_version", 
+                   "exe_checksum", "code_checksum", "permission_id"]
+    is_new_user = False
+    name = ""
+    password = ""
+    machine_id = 0
+    connection_type = 2     # options: 1 slow, 2 fast, 3 unknown, 4 not RAS
+    time_zone_bias = 240    # 240 specifies EST
+    client_version = 134    # 134 = VIE, 36-40 = Continuum
+    exe_checksum = 0xF1429CE8
+    code_checksum = 0x281CC948
+    permission_id = 0 
+
+class SessionLoginCont(SessionLoginVIE):
+    """ 
+    This has the same components as as SessionLoginVIE except it has the 64 
+    byte tail. 
+    """
+    _id = '\x24'
+    _format = SessionLoginVIE._format+"64s"
+    _components = SessionLoginVIE._components + ["continuum_data"]
+    client_version = 40
+    exe_checksum = 444
+    code_checksum = 0 
+    continuum_data = ""
+
+class SessionRegistrationForm(C2SPacket):
+    _id = '\x17'
+    _format = "32s64s32s24sBBBBBII40s40s" + 13*"40s"
+    _components = ["name","email","city","state","sex","age","from_home",
+                   "from_work","from_school","processor","unknown",
+                   "windows_reg_name","windows_reg_organization"] + \
+                   ["registry%d" % x for x in range(13)]
+    name = ""
+    email = ""
+    city = ""
+    state = ""
+    sex = 'M'
+    age = 0
+    from_home = False
+    from_work = False
+    from_school = False
+    process = 0
+    unknown = 0
+    windows_reg_name = ""
+    windows_reg_organization = ""    
+
+class ArenaEnter(C2SPacket):
     _id = '\x01'
     _format = "BbbhhH16s"
-    _components = ["ship", "filter_obscenity", "allow_audio",
+    _components = ["desired_ship", "filter_obscenity", "allow_audio",
                    "x_resolution", "y_resolution",
                    "arena_number", "arena_name"]
-    ship = 8            # [0, ... , 7, 8] : [warbird, ... , shark, spectator]
+    desired_ship = 8            # [0, ... , 7, 8] : [warbird, ... , shark, spectator]
     filter_obscenity = False
     allow_audio = 1     # if 0, no remote msgs in private arenas in sg1.34.11f
     x_resolution = 1024
@@ -22,33 +75,38 @@ class ArenaLogin(C2SPacket):
     arena_number = 0xFFFF   # 0xFFFF pub, 0xFFFD priv, or num for specific pub
     arena_name = ""         # this is only used if arena_number = 0xFFFD 
 
-class LeaveArena(C2SPacket):
+class ArenaLeave(C2SPacket):
     _id = '\x02'
 
-class Position(C2SPacket):
+class PositionWeapon(C2SPacket):
     _id = '\x03'
-    _format = "BIhhBBhhHhH" # + "HHHI"  # these are "optional"
+    _format = "bIhhBBhhHhH" # + "HHHI"  # these are "optional"
     _components = ["rotation","time","dx","y","checksum","status",
                    "x","dy","bounty","energy","weapon_info"]
                     # ["energy2", "s2c_latency", "timer", "item_info"]
     x = 0 # 0-16384 
     y = 0
+    rotation =  0 # 0-63
     dx = 0
     dy = 0
-    rotation =  0 # 0-63
     time = 0
     bounty = 0
     energy = 1
-    weapon_info = 0
     checksum = 0
     status = 0
+    # This can be fully interpreted by class subspace.game.weapon.WeaponInfo
+    # and it can be quickly checked with method subspace.game.weapon.has_weapon()
+    weapon_info = 0 
+
     # energy2 = 0
     # s2c_latency = 0
     # timer = 0
     # item_info = 0
-    def _do_checksum(self):
+    def calculate_checksum(self):
         self.checksum = 0
-        for c in self.raw():
+        # we only do the checksum on the first 22 bytes
+        # i.e. no checksum on the ExtraPosData
+        for c in self.raw()[:22]:
             self.checksum ^= ord(c)
 
 class SufferDeath(C2SPacket):
@@ -69,69 +127,52 @@ class ChatMessage(C2SPacket):
     sound = 0
     target_player_id = 0
 
+class Green(C2SPacket):
+    _id = '\x07'
+    _format = "Ihhhh"
+    _components = ["time", "x", "y", "prize_number", "player_id"]
+    player_id = 0
+    prize_number = 0
+    x = 0
+    y = 0
+    time = 0
+
 class SpectatePlayer(C2SPacket):
     _id = '\x08'
     _format = "H"
     _components = ["spectated_player_id"]
     spectated_player_id = 0
 
-class LoginVIE(C2SPacket):
-    """ Original login packet -- like Cont, without the 64 byte tail. """ 
-    _id = '\x09'
-    _format = "B32s32sIBhxxhIII"+"12x"
-    _components = ["is_new_user", "name", "password", "machine_id",
-                   "connection_type", "time_zone_bias", "client_version", 
-                   "exe_checksum", "code_checksum", "permission_id"]
-    is_new_user = False
-    name = ""
-    password = ""
-    machine_id = 0
-    connection_type = 2     # options: 1 slow, 2 fast, 3 unknown, 4 not RAS
-    time_zone_bias = 240    # 240 specifies EST
-    client_version = 134    # 134 = VIE, 36-40 = Continuum
-    exe_checksum = 0xF1429CE8
-    code_checksum = 0x281CC948
-    permission_id = 0 
-
-class LoginCont(C2SPacket):
-    """ This is the same as LoginVIE except it has the 64 byte tail. """
-    _id = '\x24'
-    _format = "B32s32sIBhxxhIII"+"12x"+"64s"
-    _components = ["is_new_user", "name", "password", "machine_id",
-                   "connection_type", "time_zone_bias", "client_version", 
-                   "memory_checksum0", "memory_checksum1", "permission_id",
-                   "continuum_data"]
-    is_new_user = False
-    name = ""
-    password = ""
-    machine_id = 1
-    connection_type = 4     # options: 1 slow, 2 fast, 3 unknown, 4 not RAS
-    time_zone_bias = 240    # 240 specifies EST
-    client_version = 40    # 134 = VIE, 36-40 = Continuum
-    memory_checksum0 = 444
-    memory_checksum1 = 0
-    permission_id = 0 
-    continuum_data = ""
-    
-
-class RequestSSUpdate(C2SPacket):
+class FileRequestUpdate(C2SPacket):
     _id = '\x0B'
 
-class MapRequest(C2SPacket):
+class FileRequestMap(C2SPacket):
     _id = '\x0C'
 
-class NewsRequest(C2SPacket):
+class FileRequestNews(C2SPacket):
     _id = '\x0D'
 
 # TODO: investigate
 # class SendVoiceMessage(C2SPacket): 
 # _id = '\x0E', _format = "I", _components["size"]
 
-class FreqChange(C2SPacket):
+class SetFreq(C2SPacket):
     _id = '\x0F'
     _format = "H"
     _components = ["new_freq"]
     new_freq = 0
+
+class SetShip(C2SPacket):
+    _id = '\x18'
+    _format = "B"
+    _components = ["new_ship"]
+    new_ship = 0 # [0, ... , 7, 8] : [warbird, ... , shark, spectator]
+
+class SetBanner(C2SPacket):
+    _id = '\x19'
+    _format = "96s"
+    _components = ["new_banner"]
+    new_banner = "" # this contains 96 bytes of an uncompressed 12x8 bitmap
 
 class AttachRequest(C2SPacket):
     _id = "\x10"
@@ -139,51 +180,18 @@ class AttachRequest(C2SPacket):
     _components = ["target_player_id"]
     target_player_id = 0
 
-class FlagRequest(C2SPacket):
+class FlagPickupRequest(C2SPacket):
     _id = "\x13"
     _format = "H"
     _components = ["flag_id"]
     flag_id = 0
 
-class DropFlags(C2SPacket):
+class FlagDrop(C2SPacket):
     _id = "\x15"
 
 # TODO: investigate
 #class FileTransfer(C2SPacket):
 #    _id = '\x16', _format = "16s", _components = ["filename"]
-
-class RegistrationForm(C2SPacket):
-    _id = '\x17'
-    _format = "32s64s32s24sBBBBBII40s40s" + 13*"40s"
-    _components = ["name","email","city","state","sex","age","from_home",
-                   "from_work","from_school","processor","unknown",
-                   "windows_reg_name","windows_reg_organization"] + \
-                   ["registry%d" % x for x in range(13)]
-    name = ""
-    email = ""
-    city = ""
-    state = ""
-    sex = 'M'
-    age = 0
-    from_home = False
-    from_work = False
-    from_school = False
-    process = 0
-    unknown = 0
-    windows_reg_name = ""
-    windows_reg_organization = ""
-
-class SetShip(C2SPacket):
-    _id = '\x18'
-    _format = "B"
-    _components = ["ship"]
-    ship = 0 # [0, ... , 7, 8] : [warbird, ... , shark, spectator]
-
-class SetBanner(C2SPacket):
-    _id = '\x19'
-    _format = "96s"
-    _components = ["bitmap"]
-    bitmap = "" # this contains 96 bytes of an uncompressed 12x8 bitmap
 
 class SecurityChecksum(C2SPacket):
     _id = '\x1A'
@@ -247,7 +255,7 @@ class SecurityViolation(C2SPacket):
             }
         return meanings[self.code]
 
-class DropBrick(C2SPacket):
+class BrickDrop(C2SPacket):
     _id = '\x1C'
     _format = "HH"
     _components = ["x","y"]
@@ -286,7 +294,7 @@ def main():
     00 00 00 00 00 00 cf 07 00 00 00 00 40 00 04 00
     """
     d = ''.join([b.decode('hex') for b in r.split()])
-    p = Position(d)
+    p = PositionWeapon(d)
     print p.y & 0xFFFF
     print p
 
