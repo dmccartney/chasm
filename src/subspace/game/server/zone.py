@@ -32,8 +32,10 @@ from yaml import load as yaml_load
 
 class Zone:
     
-    def __init__(self, address = ("", 5000), 
+    def __init__(self, 
             config = '/etc/chasm/zone.conf', auto_start = True):
+        self.cfg = yaml_load(open(config))
+        address = (self.cfg["server"]["address"], self.cfg["server"]["port"])
         self._address = address
         # this will contain all registered packet handlers
         # the lock protects this from adds/gets during _receiving_loop 
@@ -43,7 +45,6 @@ class Zone:
         # if they want to be invoked when an address disconnects in the core.
         # See the SessionManager._handle_disconnect() for an example.
         self.DISCONNECT_PACKET_ID = "DISCONNECTED" 
-        self.cfg = yaml_load(open(config))
         self._local_packet_handlers = {
             c2s_packet.ArenaEnter._id : self._handle_arena_enter,
             c2s_packet.ArenaLeave._id : self._handle_arena_leave,
@@ -60,7 +61,8 @@ class Zone:
         self.ping_server = ping.PingServer(ping_address, self)
         self.sessions = session.SessionManager(self)
         self.message = message.Messenger(self, self.cfg["messaging"])
-        self.arenas = [arena.Arena(self, "0", self.cfg["arenas"]["aswz"])]
+        self.arenas = [arena.Arena(self, arena_name, self.cfg["arenas"][arena_name]) 
+                       for arena_name in self.cfg["arenas"].iterkeys()]
     
     def start(self):
         info("starting zone")
@@ -185,25 +187,13 @@ def run():
     import logging
     logging.basicConfig(level=logging.DEBUG,
         format="<%(threadName)25.25s | %(module)10.10s > %(message)s")
-    z = Zone(("", 5000))
+    z = Zone()
     z.start()
-    #players = [Player({"address" : ("localhost", 5000),
-    #                   "name" : "divtest-%s" % chr(ord('A') + i)}, arena="") 
-    #                   for i in range(10)]
-    #sleep(5)
-    #for player in players: 
-    #    player.login()
-    #    print z.sessions
-
-    #sleep(60)
-    #print z.sessions
-    #for player in players:
-    #    player.logout()
-        #sleep(1)
-        #print z.sessions
-    #sleep(5)
-    #z.shutdown()
-
+    try:
+        while True:
+            sleep(1)
+    finally:
+        z.shutdown()
     
 if __name__ == '__main__':
     run()
