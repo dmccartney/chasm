@@ -7,7 +7,7 @@ from Queue import Queue, Empty, Full
 from time import time, sleep
 from subspace.game.ping_packet import S2CSimplePong, C2SSimplePing
 
-class PingZone:
+class PingServer:
     """
     This is where the clients can fetch player counts from the server.
     Most often, they'll query this when browsing the "zone list" in Continuum.
@@ -28,15 +28,15 @@ class PingZone:
         self._shutting_down = Event() # this is set to tell the threads to end
     
     def start(self):
-        debug("starting ping server threads")
+        #debug("starting ping server threads")
         for thread_name,thread in self._threads.iteritems():
-            warn("Starting ping thread %s" % thread_name)
+            #warn("Starting ping thread %s" % thread_name)
             thread.start()
 
     def shutdown(self):
         self._shutting_down.set()
         for thread_name,thread in self._threads.iteritems():
-            warn("Closing thread %s" % thread_name)
+            #warn("Closing ping thread %s" % thread_name)
             thread.join(3.0) # give it 3s to join
         
     def _receiving_loop(self):
@@ -63,8 +63,9 @@ class PingZone:
                 warn("%s" % err)
                 
     def _send_pong(self, client_address, timestamp):
-        player_count = self._zone.player_count()
-        p = S2CSimplePong(total=player_count, timestamp=timestamp)
+        player_count = self._zone.sessions.player_count
+        p = S2CSimplePong(total = player_count, 
+                          timestamp = timestamp)
         try:
             self._server_socket.sendto(p.raw(), client_address)
         except timeout:
@@ -79,7 +80,7 @@ if __name__ == '__main__':
         def player_count(self):
             return randint(0,255)
             
-    ps = PingZone(("127.0.0.1", 5001), Test_Zone())
+    ps = PingServer(("127.0.0.1", 5001), Test_Zone())
     ps.start()
     sleep(180)
     ps.shutdown()
