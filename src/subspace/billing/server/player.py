@@ -532,6 +532,7 @@ class Player:
 
 def main():
     import logging
+    import yaml
     from subspace.billing.server.biller import Biller
     from subspace.billing.server.zone import Zone
     from MySQLdb import connect, Error

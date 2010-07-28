@@ -11,7 +11,7 @@ from subspace.core.server import Server
 from subspace.core import packet
 from subspace.billing import b2z_packet, z2b_packet
 from subspace.billing.server import player, zone, squad, message, command
-from subspace.core.util import now
+from subspace.util import now
 from MySQLdb import connect, Error 
 from time import sleep
 from logging import debug, info, warn
