@@ -1,0 +1,132 @@
+== chasm ==
+
+I'm sharing some of the stuff I've made while implementing parts of subspace in python.  
+
+I am creating a new server that attempts to be better organized than [[http://bitbucket.org/grelminar/asss|ASSS]].  Some specific goals: I aim to create a server that
+# is comprehensible to inexperienced developers wanting to run or hack up their favorite game,
+# supports standard subspace configurations, 
+# lets players appear in the same arena but play different games, 
+# especially supports aswz and powerball's smallpub.  
+
+To these ends, I often trade narrow optimization for clarity, as reflected in my language choice: selecting python over C.  I also accept the protocol and the clients as a constraint.  I do not aim to make the server endlessly extensible without redesign -- this is a subspace server, not a generic game server.  I also use a more object oriented approach: [[http://bitbucket.org/dmccartney/chasm/src/tip/src/subspace/game/client/player.py|Players]] login, creating [[http://bitbucket.org/dmccartney/chasm/src/tip/src/subspace/game/server/session.py|Sessions]] in a [[http://bitbucket.org/dmccartney/chasm/src/tip/src/subspace/game/server/zone.py|Zone]].  The [[http://bitbucket.org/dmccartney/chasm/src/tip/src/subspace/game/server/zone.py|Zone]] then assigns the [[http://bitbucket.org/dmccartney/chasm/src/tip/src/subspace/game/client/player.py|Player]] to [[http://bitbucket.org/dmccartney/chasm/src/tip/src/subspace/game/server/arena.py|Arenas]] and these [[http://bitbucket.org/dmccartney/chasm/src/tip/src/subspace/game/server/arena.py|Arenas]], in turn, contain [[http://bitbucket.org/dmccartney/chasm/src/tip/src/subspace/game/server/arena.py|Games]] which process Player game activities.
+
+== Updates ==
+
+=== <<user dmccartney>> / divine.216 (Jul. 28, 2010): ===
+
+Today's pushed updates include a zone that supports basic functions: players can join, fly around, shoot each other, use specials, join teams, publicly chat, and die.  Still not release ready, but might be fun to poke around.
+
+I also put together a basic setup.py to ease installation.  This makes it easier to run and play with a chasm zone:
+
+{{{
+#!sh
+
+$ hg clone https://bitbucket.org/dmccartney/chasm
+$ cd chasm
+$ sudo cp -R doc/default_chasm /etc/chasm
+$ sudo python setup.py install
+$ python -m subspace.game.server.zone
+}}}
+
+This runs a zone on port 5216 by default.  Edit /etc/chasm/zone.conf to change this and other settings.
+
+I am also settling into a design that seems to work:
+
+* The Zone contains a PingServer, a SessionManager and one or more Arenas.  
+
+* The PingServer listens on Zone port + 1 and responds with the current player 
+count.  This is used by clients when browsing zone lists.  PingServer gets the
+current player_count from the SessionManager. 
+
+* SessionManager is responsible for player logins and associating a player with
+a temporary player ID.  SessionManager handles all Session* c2s_packet's.
+
+* Once a Player is logged in, the Zone is responsible for assigning him to an 
+arena.  The Zone handles c2s_packets ArenaEnter and ArenaLeave.  It uses these
+to assign the player to proper Arena(s) and then to invoke the proper process_entering_player() or process_leaving_player().
+
+* In theory (though not yet in practice) a player can be in more than one arena.
+
+* All other c2s_packets from a Player are handled by the Player's Arena via 
+Arena.process_player_packet.  Before handing the packets off to the Arena, the
+Zone looks up the Player, so the Arena processing game events receives the Player and the raw_packet.
+
+=== <<user dmccartney>> / divine.216 (Jul. 12, 2010): ===
+
+I pushed a pile of fixes and updates I've been sitting on for a while.  Many misc bug fixes together with the beginnings of a game server.  Still, nothing is ready for release.
+
+=== <<user dmccartney>> / divine.216 (Mar. 28, 2010): ===
+
+I uploaded the beginnings of a biller and a much-refactored player code in subspace.game.client.  (The doc below is thus a tad obsolete; but I'll leave it there, since the code isn't release ready anyways).
+
+=== <<user dmccartney>> / divine.216 (Feb. 11, 2010): ===
+
+I have no interest in making a new client; Continuum works great.  Making a better client is more work than I'm willing or able to do.  I'm focusing on the game and billing servers.  But I've learned that others are working on similar python projects, specifically, implementing bot clients in python.
+
+Since I implemented the basics of a bot in python -- even though it is a bit afield from my actual project -- I am sharing these parts in the hope it will help.  It is neither complete nor well tested, but it does work.  It only does VIE encryption and I included no new checksums or other dazzling revelations.  But some may find it helpful.
+
+I didn't begin this as a bot core, or even as an attempt to implement a client, so it may need some massaging to be useful for any particular end.  And I have done only minimal testing of the game features.
+
+== Outdated-Doc ==
+
+=== Simple Login / Messaging / Movement ===
+
+[[http://bitbucket.org/dmccartney/chasm/src/tip/src/subspace/game/net.py|game.net.Player]] is a basic player implementation of the game protocol atop the core protocol (see more on the core implementation below).
+
+{{{
+#!python
+from subspace.game.net import Player
+
+p = Player("playername","password",("zone.aswz.org",5000))
+p.login()
+
+p.messenger.send_public_message("hello!")
+
+p.set_ship(4)
+p.messenger.send_remote_message("divine.216","I'm in a terrier!")
+
+# move the ship around and set basic data
+p.set_ship_data(x=8192,y=8192,energy=1000,bounty=100)
+
+# private message everyone in the arena
+for person in p.arena_player_list.all():
+    p.messenger.send_private_message(person.id, "I'm about to start turning in circles!")
+
+# rotate all the way around
+for rot in range(40):
+    p.set_ship_data(rotation=rot)
+    sleep(0.5) # sleep for half a second to slow down the turn
+
+p.messenger.send_public_message("okay, I'm dizzy now, g'bye!")
+p.logout()
+}}}
+
+=== Core Sockets ===
+
+[[http://bitbucket.org/dmccartney/chasm/src/tip/src/subspace/core/net.py|core.net.Client]] implements the core protocol using, by default, the VIE encryption scheme as provided by [[http://bitbucket.org/dmccartney/chasm/src/tip/src/subspace/core/encryption.py|core.encryption.VIE]].  This core Client is used internally by [[http://bitbucket.org/dmccartney/chasm/src/tip/src/subspace/game/net.py|game.net.Player]] (and, variously, I use it in game and billing servers that I will share if and when they are ready.)
+
+{{{
+#!python
+from subspace.core.net import Client
+from subspace.game import c2s_packet, s2c_packet
+
+c = Client(("zone.aswz.org",5000))
+
+packet_out = c2s_packet.Login(name="playername",password="password")
+c.send(packet_out, reliable=True)
+
+raw_packet_in = c.recv(timeout=3.0)
+if raw_packet_in[0] == s2c_packet.LoginResponse._id:
+    packet_in = s2c_packet.LoginResponse(raw_packet_in)
+    print "Server says it's running version %s" % packet_in.version
+
+# ... etc. ...
+
+c.close()
+}}}
+
+=== Misc ===
+
+For a better look at how I keep packets organized, poke around core.packet.Packet  (and its subclasses in [[http://bitbucket.org/dmccartney/chasm/src/tip/src/subspace/game/c2s_packet.py|game.c2s_packet]] and [[http://bitbucket.org/dmccartney/chasm/src/tip/src/subspace/game/s2c_packet.py|game.s2c_packet]]).  Or look at how [[http://bitbucket.org/dmccartney/chasm/src/tip/src/subspace/game/net.py|game.net.Player]] and [[http://bitbucket.org/dmccartney/chasm/src/tip/src/subspace/core/net.py|core.net.Client]] both send and receive packets.  
+
+I do try to write lengthy and helpful comments.  But this is truly pre-alpha code, in fact it is not even the project I am directly working on.  My hope is to help other subspace developers in their parallel projects, not to provide anything for use in an actual zone -- yet.
